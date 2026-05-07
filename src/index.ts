@@ -12,14 +12,14 @@ function parseArgs(): { issueNumber: number; timeoutMs: number } {
 
     if (args.includes('--help') || args.includes('-h') || args.length === 0) {
         console.log(`
-Usage: mouse-fixer <issue-number> [--timeout <seconds>]
+Usage: mouse-fixes <issue-number> [--timeout <seconds>]
 
   <issue-number>       GitHub issue number to fix (required)
   --timeout <seconds>  Max Claude runtime in seconds (default: ${DEFAULT_TIMEOUT_S})
 
 Examples:
-  mouse-fixer 38
-  mouse-fixer 49 --timeout 300
+  mouse-fixes 38
+  mouse-fixes 49 --timeout 300
 
 Run from inside the target git repository.
         `.trim());
@@ -81,14 +81,14 @@ When you are done, output ONLY a pull request description in this exact markdown
 
 Closes #${issue.number}
 
-🤖 Generated with [mouse-fixer](https://github.com/ZhannaM85/mouse-fixer)`;
+🤖 Generated with [mouse-fixes](https://github.com/ZhannaM85/mouse-fixes)`;
 }
 
 async function main(): Promise<void> {
     const { issueNumber, timeoutMs } = parseArgs();
     const timer = new StepTimer();
 
-    console.log(`\nmouse-fixer — issue #${issueNumber}\n`);
+    console.log(`\nmouse-fixes — issue #${issueNumber}\n`);
 
     // 1. Detect repo
     let repo: string;
@@ -98,7 +98,7 @@ async function main(): Promise<void> {
             repo = detectRepo();
         } catch (e) {
             console.error(`Error: ${(e as Error).message}`);
-            console.error('Run mouse-fixer from inside a git repository with a GitHub remote.');
+            console.error('Run mouse-fixes from inside a git repository with a GitHub remote.');
             process.exit(1);
         }
         done();
