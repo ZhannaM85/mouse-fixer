@@ -7,18 +7,30 @@ import { spawnClaude } from './runner.js';
 
 const DEFAULT_TIMEOUT_S = 600; // 10 minutes
 
+function parseIssueNumber(raw: string): number {
+    // Accept a full GitHub issue URL or a plain number
+    const urlMatch = raw.match(/\/issues\/(\d+)/);
+    const n = parseInt(urlMatch ? urlMatch[1] : raw, 10);
+    if (isNaN(n) || n <= 0) {
+        console.error(`Error: "${raw}" is not a valid issue number or GitHub issue URL.`);
+        process.exit(1);
+    }
+    return n;
+}
+
 function parseArgs(): { issueNumber: number; timeoutMs: number } {
     const args = process.argv.slice(2);
 
     if (args.includes('--help') || args.includes('-h') || args.length === 0) {
         console.log(`
-Usage: mouse-fixes <issue-number> [--timeout <seconds>]
+Usage: mouse-fixes <issue> [--timeout <seconds>]
 
-  <issue-number>       GitHub issue number to fix (required)
+  <issue>              Issue number or full GitHub issue URL (required)
   --timeout <seconds>  Max Claude runtime in seconds (default: ${DEFAULT_TIMEOUT_S})
 
 Examples:
   mouse-fixes 38
+  mouse-fixes https://github.com/owner/repo/issues/38
   mouse-fixes 49 --timeout 300
 
 Run from inside the target git repository.
@@ -26,11 +38,7 @@ Run from inside the target git repository.
         process.exit(0);
     }
 
-    const issueNumber = parseInt(args[0], 10);
-    if (isNaN(issueNumber) || issueNumber <= 0) {
-        console.error(`Error: "${args[0]}" is not a valid issue number.`);
-        process.exit(1);
-    }
+    const issueNumber = parseIssueNumber(args[0]);
 
     let timeoutS = DEFAULT_TIMEOUT_S;
     const tIdx = args.indexOf('--timeout');
