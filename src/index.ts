@@ -18,8 +18,8 @@ Usage: mouse-fixer <issue-number> [--timeout <seconds>]
   --timeout <seconds>  Max Claude runtime in seconds (default: ${DEFAULT_TIMEOUT_S})
 
 Examples:
-  npx tsx /path/to/mouse-fixer/src/index.ts 38
-  npx tsx /path/to/mouse-fixer/src/index.ts 49 --timeout 300
+  mouse-fixer 38
+  mouse-fixer 49 --timeout 300
 
 Run from inside the target git repository.
         `.trim());
