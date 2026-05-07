@@ -1,4 +1,4 @@
-# mouse-fixer
+# mouse-fixes
 
 Lightweight CLI that takes a GitHub issue number, lets Claude Code fix it autonomously, then creates a branch, commits the changes, pushes, and opens a PR — all from your terminal in under 10 minutes.
 
@@ -12,14 +12,13 @@ Lightweight CLI that takes a GitHub issue number, lets Claude Code fix it autono
 ## Usage
 
 ```bash
-# From inside the repo you want to fix
+# Install once (from the mouse-fixes directory)
+cd path/to/mouse-fixes && npm link
+
+# Then from inside any repo
 cd path/to/your-repo
-
-# Fix issue #38
-npx tsx /path/to/mouse-fixer/src/index.ts 38
-
-# Override the 10-minute timeout
-npx tsx /path/to/mouse-fixer/src/index.ts 38 --timeout 300
+mouse-fixes 38
+mouse-fixes 38 --timeout 300
 ```
 
 ## What it does
