@@ -60,7 +60,28 @@ Instructions:
 - Read the relevant source files, understand the problem, and implement a minimal fix.
 - Follow the existing code style and patterns in this repository.
 - Do NOT run any git commands (branch / commit / push / PR are handled by the calling script).
-- When you are done, print one short paragraph summarising exactly what you changed and why.`;
+
+When you are done, output ONLY a pull request description in this exact markdown format (no extra text before or after):
+
+## Summary
+
+- <bullet describing the first change and why>
+- <additional bullets as needed>
+
+## Files changed
+
+| File | Change |
+|------|--------|
+| \`filename.ts\` | what changed in this file |
+
+## Acceptance criteria
+
+- [ ] <first criterion from the issue, checked off conceptually>
+- [ ] <additional criteria as needed>
+
+Closes #${issue.number}
+
+🤖 Generated with [mouse-fixer](https://github.com/ZhannaM85/mouse-fixer)`;
 }
 
 async function main(): Promise<void> {
@@ -113,13 +134,13 @@ async function main(): Promise<void> {
     }
 
     // 4. Run Claude
-    let summary: string;
+    let prBody: string;
     let toolCallLog: string;
     {
         console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
         const done = timer.start('Claude fix');
         const result = await spawnClaude(buildPrompt(repo, issue), process.cwd(), timeoutMs);
-        summary = result.summary;
+        prBody = result.summary;
         toolCallLog = result.toolCallLog;
         done(toolCallLog || undefined);
 
@@ -156,7 +177,7 @@ async function main(): Promise<void> {
     {
         const done = timer.start('Create PR');
         try {
-            prUrl = createPR(repo, branch, issue, summary);
+            prUrl = createPR(repo, branch, issue, prBody);
         } catch (e) {
             console.error(`Error creating PR: ${(e as Error).message}`);
             timer.report();
