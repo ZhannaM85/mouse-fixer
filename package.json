@@ -1,0 +1,17 @@
+{
+  "name": "mouse-fixer",
+  "version": "1.0.0",
+  "description": "Lightweight Claude Code agent that fixes a GitHub issue and opens a PR",
+  "bin": {
+    "mouse-fixer": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
