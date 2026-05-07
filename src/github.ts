@@ -1,4 +1,7 @@
 import { execSync } from 'node:child_process';
+import { writeFileSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 export interface Issue {
     number: number;
@@ -22,18 +25,17 @@ export function fetchIssue(repo: string, n: number): Issue {
     };
 }
 
-export function createPR(repo: string, branch: string, issue: Issue, summary: string): string {
+export function createPR(repo: string, branch: string, issue: Issue, prBody: string): string {
     const title = `Fix #${issue.number}: ${issue.title}`;
-    const body = [
-        `## Summary`,
-        '',
-        summary,
-        '',
-        `Closes #${issue.number}`,
-        '',
-        '🤖 Generated with [mouse-fixer](https://github.com/ZhannaM85/mouse-fixer)'
-    ].join('\n');
 
-    const cmd = `gh pr create --repo ${repo} --head ${branch} --title "${title.replace(/"/g, '\\"')}" --body "${body.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
-    return exec(cmd);
+    // Write body to a temp file so no shell escaping is needed
+    const tmpFile = join(tmpdir(), `mouse-fixer-pr-${Date.now()}.md`);
+    try {
+        writeFileSync(tmpFile, prBody, 'utf8');
+        return exec(
+            `gh pr create --repo ${repo} --head ${branch} --title "${title.replace(/"/g, '\\"')}" --body-file "${tmpFile}"`
+        );
+    } finally {
+        try { unlinkSync(tmpFile); } catch { /* best-effort */ }
+    }
 }

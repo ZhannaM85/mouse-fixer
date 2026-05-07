@@ -33,7 +33,7 @@ export async function spawnClaude(
 
         const proc = spawn(
             'claude',
-            ['--print', '--output-format', 'stream-json', '--dangerously-skip-permissions', prompt],
+            ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'],
             { cwd, shell: false, signal: controller.signal }
         );
 
