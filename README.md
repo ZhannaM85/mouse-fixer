@@ -12,14 +12,13 @@ Lightweight CLI that takes a GitHub issue number, lets Claude Code fix it autono
 ## Usage
 
 ```bash
-# From inside the repo you want to fix
+# Install once (from the mouse-fixer directory)
+cd path/to/mouse-fixer && npm link
+
+# Then from inside any repo
 cd path/to/your-repo
-
-# Fix issue #38
-npx tsx /path/to/mouse-fixer/src/index.ts 38
-
-# Override the 10-minute timeout
-npx tsx /path/to/mouse-fixer/src/index.ts 38 --timeout 300
+mouse-fixer 38
+mouse-fixer 38 --timeout 300
 ```
 
 ## What it does
