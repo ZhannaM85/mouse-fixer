@@ -1,6 +1,6 @@
 # mouse-fixes
 
-Lightweight CLI that takes a GitHub issue number, lets Claude Code fix it autonomously, then creates a branch, commits the changes, pushes, and opens a PR — all from your terminal in under 10 minutes.
+Lightweight CLI that takes a GitHub issue number, asks Claude Code to fix it **and** run the full git workflow (branch → commit → push → PR) — all autonomously, from your terminal.
 
 ## Requirements
 
@@ -18,7 +18,8 @@ cd path/to/mouse-fixes && npm link
 # Then from inside any repo
 cd path/to/your-repo
 mouse-fixes 38
-mouse-fixes 38 --timeout 300
+mouse-fixes https://github.com/owner/repo/issues/38
+mouse-fixes 49 --timeout 300
 ```
 
 ## What it does
@@ -27,15 +28,13 @@ mouse-fixes 38 --timeout 300
 |------|-------------|
 | Detect repository | Reads `owner/repo` from `git remote get-url origin` |
 | Fetch GitHub issue | Pulls title, body, and labels via `gh issue view` |
-| Create branch | `fix/{number}-{slug-of-title}` |
-| Claude fix | Streams `claude --print` in the repo directory; enforces the timeout |
-| Commit | `git add -A && git commit -m "Fix #{number}: {title}"` |
-| Push | `git push -u origin {branch}` |
-| Create PR | `gh pr create` with a summary of what Claude changed |
+| Claude fix + git + PR | Claude reads the issue, implements the fix, creates `fix/{number}-{slug}` branch, commits, pushes, and opens the PR — all via its Bash tool |
+
+Claude handles the entire workflow so it works whether invoked via this CLI or through an interactive Claude Code session.
 
 ## Timing report
 
-Every run prints a step-by-step table at the end so you know exactly where time was spent:
+Every run prints a step-by-step table at the end:
 
 ```
 ┌──────────────────────────┬──────────┬─────────────────────────────────────┐
@@ -43,23 +42,18 @@ Every run prints a step-by-step table at the end so you know exactly where time 
 ├──────────────────────────┼──────────┼─────────────────────────────────────┤
 │ Detect repository        │    0.1 s │                                     │
 │ Fetch GitHub issue       │    0.4 s │                                     │
-│ Create branch            │    0.2 s │                                     │
-│ Claude fix               │  142.3 s │ 18 calls — Bash×5 Read×8 Edit×5   │
-│ Commit                   │    0.3 s │                                     │
-│ Push                     │    1.2 s │                                     │
-│ Create PR                │    0.8 s │                                     │
+│ Claude fix + git + PR    │  142.3 s │ 18 calls — Bash×5 Read×8 Edit×5   │
 ├──────────────────────────┼──────────┼─────────────────────────────────────┤
 │ TOTAL                    │  145.3 s │                                     │
 └──────────────────────────┴──────────┴─────────────────────────────────────┘
 
-✓ PR: https://github.com/owner/repo/pull/71
+https://github.com/owner/repo/pull/71
 ```
 
 ## Behaviour on edge cases
 
 | Situation | Outcome |
 |-----------|---------|
-| Claude makes no file changes | Branch is deleted, script exits cleanly |
-| Claude times out | Commits whatever was changed, continues to PR |
 | Issue not found | Error printed, exits before touching git |
 | Not in a git repo | Error printed, exits immediately |
+| Claude times out | Warning printed; whatever Claude managed to do is left in place |

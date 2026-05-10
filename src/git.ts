@@ -20,29 +20,3 @@ export function slugify(title: string, maxLen = 40): string {
         .slice(0, maxLen)
         .replace(/-$/, '');
 }
-
-export function createBranch(name: string): void {
-    exec(`git checkout -b ${name}`);
-}
-
-export function hasChanges(): boolean {
-    return exec('git status --porcelain') !== '';
-}
-
-export function commit(message: string): void {
-    exec('git add -A');
-    exec(`git commit -m "${message.replace(/"/g, '\\"')}"`);
-}
-
-export function push(branch: string): void {
-    exec(`git push -u origin ${branch}`);
-}
-
-export function deleteBranch(branch: string): void {
-    try {
-        exec('git checkout -');
-        exec(`git branch -D ${branch}`);
-    } catch {
-        // best-effort
-    }
-}

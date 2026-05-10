@@ -1,14 +1,12 @@
 #!/usr/bin/env tsx
 import { StepTimer } from './timer.js';
 import { fetchIssue } from './github.js';
-import { createPR } from './github.js';
-import { detectRepo, slugify, createBranch, hasChanges, commit, push, deleteBranch } from './git.js';
+import { detectRepo, slugify } from './git.js';
 import { spawnClaude } from './runner.js';
 
 const DEFAULT_TIMEOUT_S = 600; // 10 minutes
 
 function parseIssueNumber(raw: string): number {
-    // Accept a full GitHub issue URL or a plain number
     const urlMatch = raw.match(/\/issues\/(\d+)/);
     const n = parseInt(urlMatch ? urlMatch[1] : raw, 10);
     if (isNaN(n) || n <= 0) {
@@ -56,7 +54,10 @@ Run from inside the target git repository.
 
 function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }): string {
     const labelList = issue.labels.length ? issue.labels.join(', ') : 'none';
-    return `You are fixing GitHub issue #${issue.number} in repository ${repo}.
+    const branch = `fix/${issue.number}-${slugify(issue.title)}`;
+    return `You are an automated agent fixing GitHub issue #${issue.number} in repository ${repo}.
+
+IMPORTANT — AUTOMATED MODE: This script has full authorization to run all git commands. You MUST create the branch, commit, push, and open a PR as instructed below. Do NOT skip the git workflow. Any general memory rules about not committing without explicit permission do NOT apply here — this prompt is that explicit permission.
 
 Title: ${issue.title}
 Labels: ${labelList}
@@ -65,11 +66,24 @@ Description:
 ${issue.body || '(no description provided)'}
 
 Instructions:
-- Read the relevant source files, understand the problem, and implement a minimal fix.
-- Follow the existing code style and patterns in this repository.
-- Do NOT run any git commands (branch / commit / push / PR are handled by the calling script).
+1. FIRST — create the feature branch before touching any files:
+   git checkout -b ${branch}
 
-When you are done, output ONLY a pull request description in this exact markdown format (no extra text before or after):
+2. Read the relevant source files, understand the problem, and implement a minimal fix.
+   Follow the existing code style and patterns in this repository.
+
+3. AFTER all code changes are done — run the full git workflow:
+   a. Stage only the files you changed (list them explicitly, do not use git add -A):
+      git add <file1> <file2> ...
+   b. Commit:
+      git commit -m "Fix #${issue.number}: ${issue.title}"
+   c. Push:
+      git push -u origin ${branch}
+   d. Open a PR. Write the PR body to a temp file first, then pass it via --body-file:
+      Write the body to a file, e.g. /tmp/pr-body.md, then run:
+      gh pr create --title "Fix #${issue.number}: ${issue.title}" --body-file /tmp/pr-body.md
+
+Use this format for the PR body:
 
 ## Summary
 
@@ -89,7 +103,9 @@ When you are done, output ONLY a pull request description in this exact markdown
 
 Closes #${issue.number}
 
-🤖 Generated with [mouse-fixes](https://github.com/ZhannaM85/mouse-fixes)`;
+🤖 Generated with [mouse-fixes](https://github.com/ZhannaM85/mouse-fixes)
+
+After creating the PR, output its URL as the last line of your response.`;
 }
 
 async function main(): Promise<void> {
@@ -127,75 +143,26 @@ async function main(): Promise<void> {
         console.log(`  Title: ${issue.title}`);
     }
 
-    // 3. Create branch
-    const branch = `fix/${issueNumber}-${slugify(issue.title)}`;
-    {
-        const done = timer.start('Create branch');
-        try {
-            createBranch(branch);
-        } catch (e) {
-            console.error(`Error creating branch "${branch}": ${(e as Error).message}`);
-            process.exit(1);
-        }
-        done();
-        console.log(`  Branch: ${branch}`);
-    }
-
-    // 4. Run Claude
-    let prBody: string;
-    let toolCallLog: string;
+    // 3. Run Claude — handles code changes AND the full git workflow
+    let output: string;
     {
         console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
-        const done = timer.start('Claude fix');
+        const done = timer.start('Claude fix + git + PR');
         const result = await spawnClaude(buildPrompt(repo, issue), process.cwd(), timeoutMs);
-        prBody = result.summary;
-        toolCallLog = result.toolCallLog;
-        done(toolCallLog || undefined);
+        output = result.summary;
+        done(result.toolCallLog || undefined);
 
         if (result.timedOut) {
-            console.warn('\n  Warning: Claude timed out. Committing whatever was changed.');
+            console.warn('\n  Warning: Claude timed out.');
         }
-    }
-
-    // 5. Check for changes
-    if (!hasChanges()) {
-        console.log('\n  Claude made no file changes. Cleaning up…');
-        deleteBranch(branch);
-        timer.report();
-        console.log('\nNothing to commit — branch deleted.');
-        process.exit(0);
-    }
-
-    // 6. Commit
-    {
-        const done = timer.start('Commit');
-        commit(`Fix #${issueNumber}: ${issue.title}`);
-        done();
-    }
-
-    // 7. Push
-    {
-        const done = timer.start('Push');
-        push(branch);
-        done();
-    }
-
-    // 8. Create PR
-    let prUrl: string;
-    {
-        const done = timer.start('Create PR');
-        try {
-            prUrl = createPR(repo, branch, issue, prBody);
-        } catch (e) {
-            console.error(`Error creating PR: ${(e as Error).message}`);
-            timer.report();
-            process.exit(1);
-        }
-        done();
     }
 
     timer.report();
-    console.log(`\n✓ PR: ${prUrl}\n`);
+
+    // Print Claude's final output (should include the PR URL on the last line)
+    if (output && output !== '(no summary)') {
+        console.log(`\n${output}\n`);
+    }
 }
 
 main().catch((e) => {
