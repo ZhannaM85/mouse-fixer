@@ -66,8 +66,8 @@ Description:
 ${issue.body || '(no description provided)'}
 
 Instructions:
-1. FIRST — create the feature branch before touching any files:
-   git checkout -b ${branch}
+1. FIRST — reset to master and create the feature branch before touching any files:
+   git checkout master && git pull origin master && git checkout -b ${branch}
 
 2. Read the relevant source files, understand the problem, and implement a minimal fix.
    Follow the existing code style and patterns in this repository.
