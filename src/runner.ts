@@ -73,18 +73,24 @@ export async function spawnClaude(
                 try {
                     const msg = JSON.parse(line);
 
-                    // Tool use start — update status immediately
-                    if (msg.type === 'tool_use') {
-                        toolStart = Date.now();
-                        lastToolName = msg.name ?? 'Unknown';
-                        printStatus(startMs, toolCalls, lastToolName);
+                    // Tool use/result are nested inside assistant/user message content
+                    if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
+                        for (const block of msg.message.content) {
+                            if (block.type === 'tool_use') {
+                                toolStart = Date.now();
+                                lastToolName = block.name ?? 'Unknown';
+                                printStatus(startMs, toolCalls, lastToolName);
+                            }
+                        }
                     }
-
-                    // Tool result — record duration, update status
-                    if (msg.type === 'tool_result' && toolStart !== null) {
-                        toolCalls.push({ tool: lastToolName, durationMs: Date.now() - toolStart });
-                        toolStart = null;
-                        printStatus(startMs, toolCalls, `done: ${lastToolName}`);
+                    if (msg.type === 'user' && Array.isArray(msg.message?.content)) {
+                        for (const block of msg.message.content) {
+                            if (block.type === 'tool_result' && toolStart !== null) {
+                                toolCalls.push({ tool: lastToolName, durationMs: Date.now() - toolStart });
+                                toolStart = null;
+                                printStatus(startMs, toolCalls, `done: ${lastToolName}`);
+                            }
+                        }
                     }
 
                     // Final result text
