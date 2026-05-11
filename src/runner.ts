@@ -102,6 +102,7 @@ export async function spawnClaude(
                     if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
                         for (const block of msg.message.content) {
                             if (block.type === 'text' && typeof block.text === 'string') {
+                                process.stdout.write(block.text + '\n');
                                 summaryLines.push(block.text.trim());
                             }
                         }
