@@ -12,35 +12,36 @@ function elapsedLabel(startMs: number): string {
     return m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
 }
 
-function snippet(text: string, max = 72): string {
+function snippet(text: string, max = 60): string {
     const clean = text.replace(/\s+/g, ' ').trim();
     return clean.length > max ? clean.slice(0, max - 1) + '…' : clean;
 }
 
-function extractActivity(event: Record<string, unknown>): string | null {
+function formatEvent(event: Record<string, unknown>, startMs: number): string | null {
     if (event.type !== 'assistant') return null;
     const msg = event.message as Record<string, unknown> | undefined;
     const content = Array.isArray(msg?.content) ? msg.content as Record<string, unknown>[] : [];
+    const t = elapsedLabel(startMs);
 
-    // Prefer tool_use (most concrete signal)
     for (const block of content) {
         if (block.type === 'tool_use') {
-            const name = block.name as string;
+            const name = (block.name as string).padEnd(12);
             const input = block.input as Record<string, unknown> ?? {};
             const detail = (input.file_path ?? input.path ?? input.command ?? input.pattern ?? '') as string;
-            return detail ? `[tool] ${name}(${detail.split(/[\\/]/).at(-1)})` : `[tool] ${name}`;
+            const label = detail
+                ? detail.split(/[\\/]/).at(-1)!
+                : JSON.stringify(input).slice(0, 50);
+            return `  [${t}]  ${name}  ${label}`;
         }
     }
-    // Thinking block — show a snippet of Claude's reasoning
     for (const block of content) {
         if (block.type === 'thinking' && typeof block.thinking === 'string') {
-            return `[thinking] ${snippet(block.thinking)}`;
+            return `  [${t}]  ${'thinking…'.padEnd(12)}  ${snippet(block.thinking)}`;
         }
     }
-    // Plain text — Claude narrating its next step
     for (const block of content) {
         if (block.type === 'text' && typeof block.text === 'string' && block.text.trim().length > 10) {
-            return `[text] ${snippet(block.text)}`;
+            return `  [${t}]  ${'text'.padEnd(12)}  ${snippet(block.text)}`;
         }
     }
     return null;
@@ -62,52 +63,52 @@ export async function spawnClaude(
         );
 
         let finalResult = '(no summary)';
-        let lastActivity = 'reading the issue…';
-        let toolCallCount = 0;
+        let lastEventMs = Date.now();
         let timedOut = false;
         const startMs = Date.now();
         let jsonBuffer = '';
 
+        // Fallback heartbeat — fires only when Claude is silent (thinking, no tool calls)
         const heartbeat = setInterval(() => {
-            process.stdout.write(`\n  ── ${elapsedLabel(startMs)} elapsed · ${toolCallCount} tool calls ──\n`);
-            process.stdout.write(`  Last: ${lastActivity}\n`);
-            try {
-                const changed = execSync('git status --short', { cwd, encoding: 'utf8' }).trim();
-                if (changed) {
-                    const files = changed.split('\n').filter(Boolean);
-                    process.stdout.write(`  Changed (${files.length}): ${files.map(f => f.trim()).join('  ')}\n`);
-                } else {
-                    process.stdout.write(`  No files changed yet\n`);
+            const silentFor = Math.round((Date.now() - lastEventMs) / 1000);
+            if (silentFor >= 25) {
+                try {
+                    const changed = execSync('git status --short', { cwd, encoding: 'utf8' }).trim();
+                    const filesSummary = changed
+                        ? changed.split('\n').filter(Boolean).map(f => f.trim()).join(', ')
+                        : 'none yet';
+                    process.stdout.write(
+                        `  [${elapsedLabel(startMs)}]  ${'(thinking…)'.padEnd(12)}  changed: ${filesSummary}\n`
+                    );
+                } catch {
+                    process.stdout.write(`  [${elapsedLabel(startMs)}]  (thinking…)\n`);
                 }
-            } catch { /* not a git repo */ }
-            process.stdout.write(`  ────────────────────────────────────────────\n\n`);
+            }
         }, 30_000);
 
         proc.stdout.on('data', (chunk: Buffer) => {
             jsonBuffer += chunk.toString();
             const lines = jsonBuffer.split('\n');
-            jsonBuffer = lines.pop() ?? ''; // last incomplete line stays in buffer
+            jsonBuffer = lines.pop() ?? '';
             for (const line of lines) {
                 const trimmed = line.trim();
                 if (!trimmed) continue;
                 try {
                     const event = JSON.parse(trimmed) as Record<string, unknown>;
-                    const label = extractActivity(event);
-                    if (label) {
-                        lastActivity = label;
-                        toolCallCount++;
+                    const formatted = formatEvent(event, startMs);
+                    if (formatted) {
+                        process.stdout.write(formatted + '\n');
+                        lastEventMs = Date.now();
                     }
-                    // Extract final text from result event
                     if (event.type === 'result' && typeof event.result === 'string') {
                         finalResult = event.result;
                     }
-                } catch { /* non-JSON line, ignore */ }
+                } catch { /* non-JSON line */ }
             }
         });
 
-        proc.stderr.on('data', (chunk: Buffer) => {
-            process.stderr.write(chunk);
-        });
+        // Suppress Claude's TUI noise (Envisioning…, +N lines, etc.) — not useful to the user
+        proc.stderr.on('data', () => { /* intentionally suppressed */ });
 
         proc.on('error', (err: NodeJS.ErrnoException) => {
             clearTimeout(timeoutTimer);
