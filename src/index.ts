@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env node
 import { StepTimer } from './timer.js';
 import { fetchIssue } from './github.js';
 import { detectRepo, slugify } from './git.js';
