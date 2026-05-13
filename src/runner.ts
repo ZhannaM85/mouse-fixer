@@ -17,11 +17,12 @@ function snippet(text: string, max = 60): string {
     return clean.length > max ? clean.slice(0, max - 1) + '…' : clean;
 }
 
-function formatEvent(event: Record<string, unknown>, startMs: number): string | null {
-    if (event.type !== 'assistant') return null;
+function formatEvent(event: Record<string, unknown>, startMs: number): string[] {
+    if (event.type !== 'assistant') return [];
     const msg = event.message as Record<string, unknown> | undefined;
     const content = Array.isArray(msg?.content) ? msg.content as Record<string, unknown>[] : [];
     const t = elapsedLabel(startMs);
+    const lines: string[] = [];
 
     for (const block of content) {
         if (block.type === 'tool_use') {
@@ -31,20 +32,10 @@ function formatEvent(event: Record<string, unknown>, startMs: number): string | 
             const label = detail
                 ? detail.split(/[\\/]/).at(-1)!
                 : JSON.stringify(input).slice(0, 50);
-            return `  [${t}]  ${name}  ${label}`;
+            lines.push(`  [${t}]  ${name}  ${label}`);
         }
     }
-    for (const block of content) {
-        if (block.type === 'thinking' && typeof block.thinking === 'string') {
-            return `  [${t}]  ${'thinking…'.padEnd(12)}  ${snippet(block.thinking)}`;
-        }
-    }
-    for (const block of content) {
-        if (block.type === 'text' && typeof block.text === 'string' && block.text.trim().length > 10) {
-            return `  [${t}]  ${'text'.padEnd(12)}  ${snippet(block.text)}`;
-        }
-    }
-    return null;
+    return lines;
 }
 
 export async function spawnClaude(
@@ -67,6 +58,7 @@ export async function spawnClaude(
         let timedOut = false;
         const startMs = Date.now();
         let jsonBuffer = '';
+        const allLines: string[] = [];
 
         // Fallback heartbeat — fires only when Claude is silent (thinking, no tool calls)
         const heartbeat = setInterval(() => {
@@ -95,9 +87,10 @@ export async function spawnClaude(
                 if (!trimmed) continue;
                 try {
                     const event = JSON.parse(trimmed) as Record<string, unknown>;
-                    const formatted = formatEvent(event, startMs);
-                    if (formatted) {
-                        process.stdout.write(formatted + '\n');
+                    const lines = formatEvent(event, startMs);
+                    if (lines.length > 0) {
+                        for (const line of lines) process.stdout.write(line + '\n');
+                        allLines.push(...lines);
                         lastEventMs = Date.now();
                     }
                     if (event.type === 'result' && typeof event.result === 'string') {
@@ -124,7 +117,7 @@ export async function spawnClaude(
         proc.on('close', () => {
             clearTimeout(timeoutTimer);
             clearInterval(heartbeat);
-            resolve({ summary: finalResult, toolCallLog: '', timedOut });
+            resolve({ summary: finalResult, toolCallLog: allLines.join('\n'), timedOut });
         });
     });
 }
