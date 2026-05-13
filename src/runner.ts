@@ -17,34 +17,59 @@ function snippet(text: string, max = 60): string {
     return clean.length > max ? clean.slice(0, max - 1) + '…' : clean;
 }
 
-function formatEvent(event: Record<string, unknown>, startMs: number): string[] {
-    if (event.type !== 'assistant') return [];
-    const msg = event.message as Record<string, unknown> | undefined;
-    const content = Array.isArray(msg?.content) ? msg.content as Record<string, unknown>[] : [];
-    const t = elapsedLabel(startMs);
-    const lines: string[] = [];
-
-    for (const block of content) {
-        if (block.type === 'tool_use') {
-            const name = (block.name as string).padEnd(12);
-            const input = block.input as Record<string, unknown> ?? {};
-            const command = input.command as string | undefined;
-            const filePath = (input.file_path ?? input.path) as string | undefined;
-            const pattern = input.pattern as string | undefined;
-            let label: string;
-            if (command) {
-                label = snippet(command, 80);
-            } else if (filePath) {
-                label = filePath.split(/[\\/]/).at(-1)!;
-            } else if (pattern) {
-                label = pattern;
-            } else {
-                label = JSON.stringify(input).slice(0, 60);
-            }
-            lines.push(`  [${t}]  ${name}  ${label}`);
-        }
+function extractContent(raw: unknown): string {
+    if (typeof raw === 'string') return raw;
+    if (Array.isArray(raw)) {
+        return (raw as Record<string, unknown>[])
+            .map(c => (typeof c.text === 'string' ? c.text : ''))
+            .join('');
     }
-    return lines;
+    return '';
+}
+
+function summarizeResult(toolName: string, content: string): string {
+    const lines = content.trim().split('\n').filter(Boolean);
+    const n = lines.length;
+    switch (toolName) {
+        case 'Read':    return `${n} line${n !== 1 ? 's' : ''}`;
+        case 'Glob':    return `${n} file${n !== 1 ? 's' : ''}`;
+        case 'Grep':    return `${n} result${n !== 1 ? 's' : ''}`;
+        case 'Edit':
+        case 'Write':   return 'saved';
+        case 'Bash':    return lines[0] ? snippet(lines[0], 70) : '(no output)';
+        default:        return n > 0 ? `${n} line${n !== 1 ? 's' : ''}` : '';
+    }
+}
+
+function formatToolCall(block: Record<string, unknown>, t: string): string {
+    const toolName = block.name as string;
+    const name = toolName.padEnd(12);
+    const input = block.input as Record<string, unknown> ?? {};
+    const command = input.command as string | undefined;
+    const filePath = (input.file_path ?? input.path) as string | undefined;
+    const pattern = input.pattern as string | undefined;
+    const lastName = (p: string) => p.split(/[\\/]/).at(-1)!;
+    const parentAndName = (p: string) => {
+        const parts = p.split(/[\\/]/);
+        return parts.length > 1 ? `${parts.at(-2)!}/${parts.at(-1)!}` : parts[0];
+    };
+    let label: string;
+    if (command) {
+        label = snippet(command, 80);
+    } else if (toolName === 'Grep' && pattern) {
+        const loc = filePath ? ` in ${lastName(filePath)}` : '';
+        label = `"${snippet(pattern, 50)}"${loc}`;
+    } else if (toolName === 'Glob' && pattern) {
+        const loc = filePath ? ` in ${lastName(filePath)}` : '';
+        label = `${pattern}${loc}`;
+    } else if (filePath) {
+        label = parentAndName(filePath);
+    } else if (pattern) {
+        label = pattern;
+    } else {
+        label = JSON.stringify(input).slice(0, 60);
+    }
+    return `  [${t}]  ${name}  ${label}`;
 }
 
 export async function spawnClaude(
@@ -68,6 +93,8 @@ export async function spawnClaude(
         const startMs = Date.now();
         let jsonBuffer = '';
         const allLines: string[] = [];
+        // tool_use_id → { toolName, t } for correlating results
+        const pendingTools = new Map<string, { toolName: string; t: string }>();
 
         // Fallback heartbeat — fires only when Claude is silent (thinking, no tool calls)
         const heartbeat = setInterval(() => {
@@ -89,19 +116,67 @@ export async function spawnClaude(
 
         proc.stdout.on('data', (chunk: Buffer) => {
             jsonBuffer += chunk.toString();
-            const lines = jsonBuffer.split('\n');
-            jsonBuffer = lines.pop() ?? '';
-            for (const line of lines) {
+            const rawLines = jsonBuffer.split('\n');
+            jsonBuffer = rawLines.pop() ?? '';
+            for (const line of rawLines) {
                 const trimmed = line.trim();
                 if (!trimmed) continue;
                 try {
                     const event = JSON.parse(trimmed) as Record<string, unknown>;
-                    const lines = formatEvent(event, startMs);
-                    if (lines.length > 0) {
-                        for (const line of lines) process.stdout.write(line + '\n');
-                        allLines.push(...lines);
-                        lastEventMs = Date.now();
+                    const msg = event.message as Record<string, unknown> | undefined;
+                    const content = Array.isArray(msg?.content)
+                        ? msg.content as Record<string, unknown>[]
+                        : [];
+
+                    if (event.type === 'assistant') {
+                        const t = elapsedLabel(startMs);
+                        for (const block of content) {
+                            if (block.type === 'text' && typeof block.text === 'string') {
+                                // First non-empty sentence or line — skip pure whitespace
+                                const first = block.text.split(/[.\n]/).map(s => s.trim()).find(s => s.length > 10);
+                                if (first) {
+                                    const textLine = `  [${t}]  · ${snippet(first, 90)}`;
+                                    process.stdout.write(textLine + '\n');
+                                    allLines.push(textLine);
+                                    lastEventMs = Date.now();
+                                }
+                            }
+                            if (block.type === 'tool_use') {
+                                const callLine = formatToolCall(block, t);
+                                process.stdout.write(callLine + '\n');
+                                allLines.push(callLine);
+                                lastEventMs = Date.now();
+                                if (block.id) {
+                                    pendingTools.set(block.id as string, {
+                                        toolName: block.name as string,
+                                        t,
+                                    });
+                                }
+                            }
+                        }
                     }
+
+                    if (event.type === 'user') {
+                        for (const block of content) {
+                            if (block.type === 'tool_result') {
+                                const id = block.tool_use_id as string;
+                                const pending = pendingTools.get(id);
+                                if (pending) {
+                                    pendingTools.delete(id);
+                                    const resultContent = extractContent(block.content);
+                                    const summary = summarizeResult(pending.toolName, resultContent);
+                                    if (summary) {
+                                        const indent = `  [${pending.t}]  `;
+                                        const resultLine = `${indent}${'↳'.padEnd(12)}  ${summary}`;
+                                        process.stdout.write(resultLine + '\n');
+                                        allLines.push(resultLine);
+                                        lastEventMs = Date.now();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if (event.type === 'result' && typeof event.result === 'string') {
                         finalResult = event.result;
                     }
