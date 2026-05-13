@@ -36,7 +36,7 @@ function summarizeResult(toolName: string, content: string): string {
         case 'Grep':    return `${n} result${n !== 1 ? 's' : ''}`;
         case 'Edit':
         case 'Write':   return 'saved';
-        case 'Bash':    return lines[0] ? snippet(lines[0], 70) : '(no output)';
+        case 'Bash':    return lines[0] ?? '(no output)';
         default:        return n > 0 ? `${n} line${n !== 1 ? 's' : ''}` : '';
     }
 }
@@ -135,7 +135,7 @@ export async function spawnClaude(
                                 // First non-empty sentence or line — skip pure whitespace
                                 const first = block.text.split(/[.\n]/).map(s => s.trim()).find(s => s.length > 10);
                                 if (first) {
-                                    const textLine = `  [${t}]  · ${snippet(first, 90)}`;
+                                    const textLine = `  [${t}]  · ${first}`;
                                     process.stdout.write(textLine + '\n');
                                     allLines.push(textLine);
                                     lastEventMs = Date.now();
