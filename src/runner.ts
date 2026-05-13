@@ -28,10 +28,19 @@ function formatEvent(event: Record<string, unknown>, startMs: number): string[] 
         if (block.type === 'tool_use') {
             const name = (block.name as string).padEnd(12);
             const input = block.input as Record<string, unknown> ?? {};
-            const detail = (input.file_path ?? input.path ?? input.command ?? input.pattern ?? '') as string;
-            const label = detail
-                ? detail.split(/[\\/]/).at(-1)!
-                : JSON.stringify(input).slice(0, 50);
+            const command = input.command as string | undefined;
+            const filePath = (input.file_path ?? input.path) as string | undefined;
+            const pattern = input.pattern as string | undefined;
+            let label: string;
+            if (command) {
+                label = snippet(command, 80);
+            } else if (filePath) {
+                label = filePath.split(/[\\/]/).at(-1)!;
+            } else if (pattern) {
+                label = pattern;
+            } else {
+                label = JSON.stringify(input).slice(0, 60);
+            }
             lines.push(`  [${t}]  ${name}  ${label}`);
         }
     }
