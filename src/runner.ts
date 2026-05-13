@@ -12,10 +12,6 @@ function elapsedLabel(startMs: number): string {
     return m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
 }
 
-function snippet(text: string, max = 60): string {
-    const clean = text.replace(/\s+/g, ' ').trim();
-    return clean.length > max ? clean.slice(0, max - 1) + '…' : clean;
-}
 
 function extractContent(raw: unknown): string {
     if (typeof raw === 'string') return raw;
