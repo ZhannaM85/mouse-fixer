@@ -22,6 +22,8 @@ mouse-fixes https://github.com/owner/repo/issues/38
 mouse-fixes 49 --timeout 300
 ```
 
+> **Tip:** Run from **Git Bash** (not PowerShell or Claude Code's built-in terminal) to see the full live output. Other terminals may truncate the streaming log to the last few lines.
+
 ## What it does
 
 | Step | Description |
