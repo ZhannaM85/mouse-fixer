@@ -55,10 +55,10 @@ function formatToolCall(block: Record<string, unknown>, t: string): string {
     };
     let label: string;
     if (command) {
-        label = snippet(command, 80);
+        label = command;
     } else if (toolName === 'Grep' && pattern) {
         const loc = filePath ? ` in ${lastName(filePath)}` : '';
-        label = `"${snippet(pattern, 50)}"${loc}`;
+        label = `"${pattern}"${loc}`;
     } else if (toolName === 'Glob' && pattern) {
         const loc = filePath ? ` in ${lastName(filePath)}` : '';
         label = `${pattern}${loc}`;
