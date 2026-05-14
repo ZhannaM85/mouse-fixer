@@ -4,6 +4,18 @@ interface Step {
     detail: string;
 }
 
+export interface SessionStats {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    totalCostUsd: number;
+    toolCallCount: number;
+    promptOverheadTokens: number;
+    linesAdded: number;
+    linesDeleted: number;
+}
+
 export class StepTimer {
     private steps: Step[] = [];
     private startMs = Date.now();
@@ -15,7 +27,7 @@ export class StepTimer {
         };
     }
 
-    report(): void {
+    report(stats?: SessionStats): void {
         const COL1 = 26;
         const COL2 = 10;
         const COL3 = 40;
@@ -39,5 +51,36 @@ export class StepTimer {
         console.log(hr('├', '┼', '┤'));
         console.log(`│ ${pad('TOTAL', COL1 - 2)} │${fmt(total)}│ ${pad('', COL3 - 1)}│`);
         console.log(hr('└', '┴', '┘'));
+
+        if (!stats) return;
+
+        // Token & code stats table — same outer width as the step table (80 chars)
+        const CA = 30;  // label column
+        const CB = 47;  // value column
+        const hr2 = (l: string, m: string, r: string) => l + '─'.repeat(CA) + m + '─'.repeat(CB) + r;
+        const row = (label: string, value: string) =>
+            `│ ${label.padEnd(CA - 2)} │ ${value.padEnd(CB - 2)} │`;
+
+        const fmtN = (n: number) => n.toLocaleString('en-US');
+        const cacheHitPct = stats.inputTokens > 0
+            ? Math.round((stats.cacheReadTokens / stats.inputTokens) * 100)
+            : 0;
+
+        console.log('');
+        console.log(hr2('┌', '┬', '┐'));
+        console.log(row('Token & Code Stats', ''));
+        console.log(hr2('├', '┼', '┤'));
+        console.log(row('Input tokens (billed)', `${fmtN(stats.inputTokens)}  (~${fmtN(stats.promptOverheadTokens)} prompt overhead)`));
+        console.log(row('Output tokens', fmtN(stats.outputTokens)));
+        console.log(row('Cache read tokens', `${fmtN(stats.cacheReadTokens)}  (${cacheHitPct}% of input)`));
+        console.log(row('Cache write tokens', fmtN(stats.cacheWriteTokens)));
+        console.log(row('Tool calls', String(stats.toolCallCount)));
+        if (stats.totalCostUsd > 0) {
+            console.log(row('Estimated cost', `$${stats.totalCostUsd.toFixed(4)}`));
+        }
+        console.log(hr2('├', '┼', '┤'));
+        console.log(row('Lines added', `+${fmtN(stats.linesAdded)}`));
+        console.log(row('Lines deleted', `-${fmtN(stats.linesDeleted)}`));
+        console.log(hr2('└', '┴', '┘'));
     }
 }

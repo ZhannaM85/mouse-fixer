@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { StepTimer } from './timer.js';
+import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue } from './github.js';
-import { detectRepo, slugify } from './git.js';
+import { detectRepo, slugify, getGitDiffStats } from './git.js';
 import { spawnClaude } from './runner.js';
 
 const DEFAULT_TIMEOUT_S = 600; // 10 minutes
@@ -145,19 +145,34 @@ async function main(): Promise<void> {
 
     // 3. Run Claude — handles code changes AND the full git workflow
     let output: string;
+    let sessionStats: SessionStats | undefined;
     {
         console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
         const done = timer.start('Claude fix + git + PR');
-        const result = await spawnClaude(buildPrompt(repo, issue), process.cwd(), timeoutMs);
+        const prompt = buildPrompt(repo, issue);
+        const result = await spawnClaude(prompt, process.cwd(), timeoutMs);
         output = result.summary;
         done(result.toolCallLog || undefined);
 
         if (result.timedOut) {
             console.warn('\n  Warning: Claude timed out.');
         }
+
+        if (result.usage) {
+            const { linesAdded, linesDeleted } = getGitDiffStats(process.cwd());
+            // Overhead = template boilerplate minus the issue-specific content
+            const issueChars = issue.title.length + (issue.body?.length ?? 0);
+            const overheadChars = Math.max(0, prompt.length - issueChars);
+            sessionStats = {
+                ...result.usage,
+                promptOverheadTokens: Math.round(overheadChars / 4),
+                linesAdded,
+                linesDeleted,
+            };
+        }
     }
 
-    timer.report();
+    timer.report(sessionStats);
 
     // Print Claude's final output (should include the PR URL on the last line)
     if (output && output !== '(no summary)') {

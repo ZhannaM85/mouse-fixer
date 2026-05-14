@@ -1,9 +1,19 @@
 import { spawn, execSync } from 'node:child_process';
 
+export interface UsageStats {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    totalCostUsd: number;
+    toolCallCount: number;
+}
+
 interface RunResult {
     summary: string;
     toolCallLog: string;
     timedOut: boolean;
+    usage: UsageStats | null;
 }
 
 function elapsedLabel(startMs: number): string {
@@ -89,6 +99,8 @@ export async function spawnClaude(
         const startMs = Date.now();
         let jsonBuffer = '';
         const allLines: string[] = [];
+        let toolCallCount = 0;
+        let usage: UsageStats | null = null;
         // tool_use_id → { toolName, t } for correlating results
         const pendingTools = new Map<string, { toolName: string; t: string }>();
 
@@ -142,6 +154,7 @@ export async function spawnClaude(
                                 process.stdout.write(callLine + '\n');
                                 allLines.push(callLine);
                                 lastEventMs = Date.now();
+                                toolCallCount++;
                                 if (block.id) {
                                     pendingTools.set(block.id as string, {
                                         toolName: block.name as string,
@@ -173,8 +186,19 @@ export async function spawnClaude(
                         }
                     }
 
-                    if (event.type === 'result' && typeof event.result === 'string') {
-                        finalResult = event.result;
+                    if (event.type === 'result') {
+                        if (typeof event.result === 'string') finalResult = event.result;
+                        const u = event.usage as Record<string, number> | undefined;
+                        if (u) {
+                            usage = {
+                                inputTokens: u.input_tokens ?? 0,
+                                outputTokens: u.output_tokens ?? 0,
+                                cacheReadTokens: u.cache_read_input_tokens ?? 0,
+                                cacheWriteTokens: u.cache_creation_input_tokens ?? 0,
+                                totalCostUsd: (event.total_cost_usd as number) ?? 0,
+                                toolCallCount,
+                            };
+                        }
                     }
                 } catch { /* non-JSON line */ }
             }
@@ -188,7 +212,7 @@ export async function spawnClaude(
             clearInterval(heartbeat);
             if (err.name === 'AbortError' || controller.signal.aborted) {
                 timedOut = true;
-                resolve({ summary: '[TIMED OUT] Claude did not finish within the allowed time.', toolCallLog: '', timedOut: true });
+                resolve({ summary: '[TIMED OUT] Claude did not finish within the allowed time.', toolCallLog: '', timedOut: true, usage: null });
             } else {
                 reject(err);
             }
@@ -197,7 +221,7 @@ export async function spawnClaude(
         proc.on('close', () => {
             clearTimeout(timeoutTimer);
             clearInterval(heartbeat);
-            resolve({ summary: finalResult, toolCallLog: allLines.join('\n'), timedOut });
+            resolve({ summary: finalResult, toolCallLog: allLines.join('\n'), timedOut, usage });
         });
     });
 }
