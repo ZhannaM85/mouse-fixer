@@ -73,7 +73,8 @@ export class StepTimer {
         console.log(hr2('├', '┼', '┤'));
         console.log(row('Input tokens (billed)', `${fmtN(stats.inputTokens)}  (~${fmtN(stats.promptOverheadTokens)} prompt overhead)`));
         console.log(row('Output tokens', fmtN(stats.outputTokens)));
-        console.log(row('Cache read tokens', `${fmtN(stats.cacheReadTokens)}  (${cacheHitPct}% of input)`));
+        const cacheLabel = cacheHitPct >= 80 ? 'excellent' : cacheHitPct >= 40 ? 'ok' : 'low';
+        console.log(row('Cache read tokens', `${fmtN(stats.cacheReadTokens)}  (${cacheHitPct}% hit rate — ${cacheLabel}, higher is cheaper)`));
         console.log(row('Cache write tokens', fmtN(stats.cacheWriteTokens)));
         console.log(row('Tool calls', String(stats.toolCallCount)));
         if (stats.totalCostUsd > 0) {
