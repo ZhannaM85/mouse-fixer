@@ -62,8 +62,9 @@ export class StepTimer {
             `│ ${label.padEnd(CA - 2)} │ ${value.padEnd(CB - 2)} │`;
 
         const fmtN = (n: number) => n.toLocaleString('en-US');
-        const cacheHitPct = stats.inputTokens > 0
-            ? Math.round((stats.cacheReadTokens / stats.inputTokens) * 100)
+        const totalInput = stats.inputTokens + stats.cacheReadTokens + stats.cacheWriteTokens;
+        const cacheHitPct = totalInput > 0
+            ? Math.round((stats.cacheReadTokens / totalInput) * 100)
             : 0;
 
         console.log('');
