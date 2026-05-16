@@ -1,3 +1,9 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/logo-light.png">
+  <img alt="mouse-fixes" src="docs/assets/logo-dark.png" width="600">
+</picture>
+
 # mouse-fixes
 
 Lightweight CLI that takes a GitHub issue number, asks Claude Code to fix it **and** run the full git workflow (branch → commit → push → PR) — all autonomously, from your terminal.
