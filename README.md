@@ -4,7 +4,7 @@
   <img alt="mouse-fixes" src="docs/assets/logo-dark.png" width="600">
 </picture>
 
-# mouse-fixes
+# <img src="docs/assets/favicon.png" width="40" align="center"> mouse-fixes
 
 Lightweight CLI that takes a GitHub issue number, asks Claude Code to fix it **and** run the full git workflow (branch → commit → push → PR) — all autonomously, from your terminal.
 
