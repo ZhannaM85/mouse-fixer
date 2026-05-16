@@ -2,12 +2,24 @@
 
 # mouse-fixes
 
+**mouse-fixes** is a zero-touch CLI that takes a GitHub issue number, hands it to Claude Code,
+and gets back a merged-ready pull request — branch created, code fixed, PR opened — with no human
+in the loop.
+
 Lightweight CLI that takes a GitHub issue number, asks Claude Code to fix it **and** run the full git workflow (branch → commit → push → PR) — all autonomously, from your terminal.
+
+## How it works
+
+1. **Read issue** — fetches title, body, and labels from GitHub
+2. **Fix code** — Claude reads the relevant files and implements a minimal fix
+3. **Create branch** — `fix/{number}-{slug}` branched from master
+4. **Push changes** — commits and pushes to origin
+5. **Create PR** — opens a pull request with a structured description
 
 ## Requirements
 
 - Node.js 20+
-- [`gh`](https://cli.github.com/) — authenticated with your GitHub account
+- [`gh`](https://cli.github.com/) — authenticated with your GitHub account, or `GITHUB_TOKEN` set in your environment
 - [`claude`](https://claude.ai/code) — Claude Code CLI installed and logged in
 - Run from inside a local clone of the target git repository
 
@@ -87,6 +99,12 @@ https://github.com/owner/repo/pull/71
 ```
 
 **Cache read %** is the efficiency signal: a high percentage (>70%) means Claude's prompt caching is working well and subsequent turns are cheap. A low percentage means most tokens are billed at the full input rate.
+
+## Cost
+
+A typical run costs **$0.05–$2** depending on codebase size and session length. The range is wide because Claude reads however many files it needs to understand the issue — a small targeted fix on a focused repo lands near the low end; a sprawling codebase with many context files drifts toward the high end.
+
+Prompt caching keeps repeat runs cheap: once Claude has read the main source files in a session, subsequent turns reuse the cached context at ~10% of the normal input token rate. The "Cache read %" line in the stats report shows how effectively caching is working for each run.
 
 ## Behaviour on edge cases
 
