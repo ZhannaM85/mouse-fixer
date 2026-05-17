@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue } from './github.js';
 import { detectRepo, slugify, getGitDiffStats } from './git.js';
@@ -111,6 +113,25 @@ Closes #${issue.number}
 After creating the PR, output its URL as the last line of your response.`;
 }
 
+function markIssueDone(issueNumber: number, cwd: string): void {
+    const filePath = join(cwd, 'docs', 'issues-priority.md');
+    if (!existsSync(filePath)) return;
+
+    const original = readFileSync(filePath, 'utf8');
+    const updated = original.split('\n').map(line => {
+        if (!line.includes(`[#${issueNumber}]`) || line.includes('~~')) return line;
+        return line.replace(/\|([^|]+)/g, (_, cell) => {
+            const trimmed = cell.trim();
+            return trimmed ? `| ~~${trimmed}~~ ` : `|${cell}`;
+        });
+    }).join('\n');
+
+    if (updated !== original) {
+        writeFileSync(filePath, updated, 'utf8');
+        console.log(`  Marked #${issueNumber} as done in docs/issues-priority.md`);
+    }
+}
+
 async function main(): Promise<void> {
     const { issueNumber, timeoutMs } = parseArgs();
     const timer = new StepTimer();
@@ -159,6 +180,8 @@ async function main(): Promise<void> {
 
         if (result.timedOut) {
             console.warn('\n  Warning: Claude timed out.');
+        } else {
+            markIssueDone(issueNumber, process.cwd());
         }
 
         if (result.usage) {
