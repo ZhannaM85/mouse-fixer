@@ -80,8 +80,11 @@ Instructions:
    c. Push:
       git push -u origin ${branch}
    d. Open a PR. Write the PR body to a temp file first, then pass it via --body-file:
-      Write the body to a file, e.g. /tmp/pr-body.md, then run:
-      gh pr create --title "Fix #${issue.number}: ${issue.title}" --body-file /tmp/pr-body.md
+      Use the system temp directory — NEVER write inside the repo folder.
+      On Windows use: $env:TEMP\\pr-body.md or %TEMP%\\pr-body.md
+      On Linux/Mac use: /tmp/pr-body.md
+      Then run:
+      gh pr create --title "Fix #${issue.number}: ${issue.title}" --body-file <temp-path>
 
 Use this format for the PR body:
 
