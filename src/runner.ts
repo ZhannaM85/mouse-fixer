@@ -81,15 +81,19 @@ function formatToolCall(block: Record<string, unknown>, t: string): string {
 export async function spawnClaude(
     prompt: string,
     cwd: string,
-    timeoutMs: number
+    timeoutMs: number,
+    model?: string
 ): Promise<RunResult> {
     return new Promise((resolve, reject) => {
         const controller = new AbortController();
         const timeoutTimer = setTimeout(() => controller.abort(), timeoutMs);
 
+        const claudeArgs = ['-p', prompt, '--dangerously-skip-permissions', '--output-format', 'stream-json', '--verbose'];
+        if (model) claudeArgs.push('--model', model);
+
         const proc = spawn(
             'claude',
-            ['-p', prompt, '--dangerously-skip-permissions', '--output-format', 'stream-json', '--verbose'],
+            claudeArgs,
             { cwd, shell: false, signal: controller.signal }
         );
 

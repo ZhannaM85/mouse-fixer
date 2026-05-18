@@ -36,7 +36,7 @@ function resolveNextIssue(cwd: string): number {
 }
 
 type Command =
-    | { kind: 'fix'; issueNumber: number; timeoutMs: number }
+    | { kind: 'fix'; issueNumber: number; timeoutMs: number; model?: string }
     | { kind: 'start'; timeoutMs: number };
 
 function parseArgs(): Command {
@@ -44,19 +44,23 @@ function parseArgs(): Command {
 
     if (args.includes('--help') || args.includes('-h') || args.length === 0) {
         console.log(`
-Usage: mouse-fixes <issue> [--timeout <seconds>]
-       mouse-fixes next   [--timeout <seconds>]
+Usage: mouse-fixes <issue> [--timeout <seconds>] [--model <model-id>]
+       mouse-fixes next   [--timeout <seconds>] [--model <model-id>]
        mouse-fixes start  [--timeout <seconds>]
 
   <issue>              Issue number or full GitHub issue URL (required)
   next                 Auto-pick the next open issue from docs/issues-priority.md
   start                Bootstrap docs/issues-priority.md from open GitHub issues
   --timeout <seconds>  Max Claude runtime in seconds (default: ${DEFAULT_TIMEOUT_S})
+  --model <model-id>   Claude model to use (e.g. claude-haiku-4-5-20251001, claude-sonnet-4-6)
+                       If omitted, the claude CLI uses its own default
 
 Examples:
   mouse-fixes 38
   mouse-fixes https://github.com/owner/repo/issues/38
   mouse-fixes 49 --timeout 300
+  mouse-fixes 42 --model claude-haiku-4-5-20251001
+  mouse-fixes 43 --model claude-sonnet-4-6
   mouse-fixes next
   mouse-fixes start
 
@@ -76,6 +80,17 @@ Run from inside the target git repository.
         timeoutS = val;
     }
 
+    let model: string | undefined;
+    const mIdx = args.indexOf('--model');
+    if (mIdx !== -1) {
+        const val = args[mIdx + 1];
+        if (!val || val.startsWith('--')) {
+            console.error('Error: --model requires a model ID argument.');
+            process.exit(1);
+        }
+        model = val;
+    }
+
     if (args[0] === 'start') {
         return { kind: 'start', timeoutMs: timeoutS * 1000 };
     }
@@ -84,7 +99,7 @@ Run from inside the target git repository.
         ? resolveNextIssue(process.cwd())
         : parseIssueNumber(args[0]);
 
-    return { kind: 'fix', issueNumber, timeoutMs: timeoutS * 1000 };
+    return { kind: 'fix', issueNumber, timeoutMs: timeoutS * 1000, model };
 }
 
 function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, defaultBranch: string): string {
@@ -293,10 +308,11 @@ async function main(): Promise<void> {
         return;
     }
 
-    const { issueNumber, timeoutMs } = command;
+    const { issueNumber, timeoutMs, model } = command;
     const timer = new StepTimer();
 
-    console.log(`\nmouse-fixes — issue #${issueNumber}\n`);
+    const modelLabel = model ? `  model: ${model}` : '';
+    console.log(`\nmouse-fixes — issue #${issueNumber}${modelLabel}\n`);
 
     // 1. Detect repo
     let repo: string;
@@ -335,7 +351,7 @@ async function main(): Promise<void> {
         const done = timer.start('Claude fix + git + PR');
         const defaultBranch = detectDefaultBranch();
         const prompt = buildPrompt(repo, issue, defaultBranch);
-        const result = await spawnClaude(prompt, process.cwd(), timeoutMs);
+        const result = await spawnClaude(prompt, process.cwd(), timeoutMs, model);
         output = result.summary;
         done(result.toolCallLog || undefined);
 
