@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { StepTimer, SessionStats } from './timer.js';
-import { fetchIssue } from './github.js';
+import { fetchIssue, fetchAllIssues, Issue } from './github.js';
 import { detectRepo, slugify, getGitDiffStats, detectDefaultBranch } from './git.js';
 import { spawnClaude } from './runner.js';
 
@@ -35,16 +35,22 @@ function resolveNextIssue(cwd: string): number {
     process.exit(1);
 }
 
-function parseArgs(): { issueNumber: number; timeoutMs: number } {
+type Command =
+    | { kind: 'fix'; issueNumber: number; timeoutMs: number }
+    | { kind: 'start'; timeoutMs: number };
+
+function parseArgs(): Command {
     const args = process.argv.slice(2);
 
     if (args.includes('--help') || args.includes('-h') || args.length === 0) {
         console.log(`
 Usage: mouse-fixes <issue> [--timeout <seconds>]
        mouse-fixes next   [--timeout <seconds>]
+       mouse-fixes start  [--timeout <seconds>]
 
   <issue>              Issue number or full GitHub issue URL (required)
   next                 Auto-pick the next open issue from docs/issues-priority.md
+  start                Bootstrap docs/issues-priority.md from open GitHub issues
   --timeout <seconds>  Max Claude runtime in seconds (default: ${DEFAULT_TIMEOUT_S})
 
 Examples:
@@ -52,15 +58,12 @@ Examples:
   mouse-fixes https://github.com/owner/repo/issues/38
   mouse-fixes 49 --timeout 300
   mouse-fixes next
+  mouse-fixes start
 
 Run from inside the target git repository.
         `.trim());
         process.exit(0);
     }
-
-    const issueNumber = args[0] === 'next'
-        ? resolveNextIssue(process.cwd())
-        : parseIssueNumber(args[0]);
 
     let timeoutS = DEFAULT_TIMEOUT_S;
     const tIdx = args.indexOf('--timeout');
@@ -73,7 +76,15 @@ Run from inside the target git repository.
         timeoutS = val;
     }
 
-    return { issueNumber, timeoutMs: timeoutS * 1000 };
+    if (args[0] === 'start') {
+        return { kind: 'start', timeoutMs: timeoutS * 1000 };
+    }
+
+    const issueNumber = args[0] === 'next'
+        ? resolveNextIssue(process.cwd())
+        : parseIssueNumber(args[0]);
+
+    return { kind: 'fix', issueNumber, timeoutMs: timeoutS * 1000 };
 }
 
 function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, defaultBranch: string): string {
@@ -138,6 +149,116 @@ Closes #${issue.number}
 After creating the PR, output its URL as the last line of your response.`;
 }
 
+function buildStartPrompt(repo: string, issues: Issue[]): string {
+    const issueList = issues.map(i => {
+        const labels = i.labels.length ? `Labels: ${i.labels.join(', ')}` : 'Labels: none';
+        const body = i.body.trim() ? `\n  Body: ${i.body.trim().replace(/\n/g, '\n  ')}` : '';
+        return `#${i.number}: ${i.title}\n  ${labels}${body}`;
+    }).join('\n\n');
+
+    return `You are bootstrapping a priority list for the repository ${repo}.
+
+The repository has the following open GitHub issues:
+
+${issueList}
+
+Your task:
+1. Analyse the issues above, identifying dependencies between them and assessing each issue's risk and scope.
+2. Group them into implementation tiers (Tier 1 = foundation/quick wins, higher tiers = riskier or depend on earlier tiers).
+3. Write the result to \`docs/issues-priority.md\` (create the \`docs/\` directory if it does not exist).
+
+Use exactly this file format:
+
+\`\`\`
+# Issues Priority List
+
+Issues grouped by implementation tier. Work top-to-bottom within each tier; dependencies are noted where order matters within a tier.
+
+---
+
+## Tier 1 — <short tier description>
+_<one sentence describing this tier's theme>_
+
+| # | Issue | Notes |
+|---|-------|-------|
+| [#N](https://github.com/${repo}/issues/N) | <issue title> | <brief note, e.g. "Required by #X" or "Depends on #Y"> |
+\`\`\`
+
+Rules:
+- Every open issue must appear exactly once.
+- Link each issue number to its URL: https://github.com/${repo}/issues/N
+- The Notes column should explain ordering rationale or dependencies.
+- Use as many tiers as the issues warrant.
+- Write ONLY the markdown file — no commits, no PRs, no other files.
+
+After writing the file, output one line: "Created docs/issues-priority.md with <N> issues across <T> tiers."`;
+}
+
+async function runStart(timeoutMs: number): Promise<void> {
+    const timer = new StepTimer();
+    const cwd = process.cwd();
+
+    console.log('\nmouse-fixes start\n');
+
+    const filePath = join(cwd, 'docs', 'issues-priority.md');
+    if (existsSync(filePath)) {
+        console.error('Error: docs/issues-priority.md already exists.');
+        console.error('Delete it first or edit it manually.');
+        process.exit(1);
+    }
+
+    let repo: string;
+    {
+        const done = timer.start('Detect repository');
+        try {
+            repo = detectRepo();
+        } catch (e) {
+            console.error(`Error: ${(e as Error).message}`);
+            console.error('Run mouse-fixes from inside a git repository with a GitHub remote.');
+            process.exit(1);
+        }
+        done();
+        console.log(`  Repo: ${repo}`);
+    }
+
+    let issues: Issue[];
+    {
+        const done = timer.start('Fetch open issues');
+        try {
+            issues = fetchAllIssues(repo);
+        } catch (e) {
+            console.error(`Error fetching issues: ${(e as Error).message}`);
+            process.exit(1);
+        }
+        done();
+        if (issues.length === 0) {
+            console.log('  No open issues found. Nothing to bootstrap.');
+            process.exit(0);
+        }
+        console.log(`  Found ${issues.length} open issue${issues.length !== 1 ? 's' : ''}`);
+    }
+
+    let output: string;
+    {
+        console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
+        const done = timer.start('Claude generate + write file');
+        const prompt = buildStartPrompt(repo, issues);
+        const result = await spawnClaude(prompt, cwd, timeoutMs);
+        output = result.summary;
+        done(result.toolCallLog || undefined);
+
+        if (result.timedOut) {
+            console.warn('\n  Warning: Claude timed out.');
+        }
+    }
+
+    timer.report();
+
+    if (output && output !== '(no summary)') {
+        console.log(`\n${output}\n`);
+    }
+}
+
 function markIssueDone(issueNumber: number, cwd: string): void {
     const filePath = join(cwd, 'docs', 'issues-priority.md');
     if (!existsSync(filePath)) return;
@@ -165,7 +286,14 @@ function markIssueDone(issueNumber: number, cwd: string): void {
 }
 
 async function main(): Promise<void> {
-    const { issueNumber, timeoutMs } = parseArgs();
+    const command = parseArgs();
+
+    if (command.kind === 'start') {
+        await runStart(command.timeoutMs);
+        return;
+    }
+
+    const { issueNumber, timeoutMs } = command;
     const timer = new StepTimer();
 
     console.log(`\nmouse-fixes — issue #${issueNumber}\n`);
