@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue } from './github.js';
@@ -152,7 +153,14 @@ function markIssueDone(issueNumber: number, cwd: string): void {
 
     if (updated !== original) {
         writeFileSync(filePath, updated, 'utf8');
-        console.log(`  Marked #${issueNumber} as done in docs/issues-priority.md`);
+        try {
+            execSync('git add docs/issues-priority.md', { cwd, stdio: 'pipe' });
+            execSync(`git commit -m "docs: mark #${issueNumber} as done in issues-priority.md"`, { cwd, stdio: 'pipe' });
+            execSync('git push', { cwd, stdio: 'pipe' });
+            console.log(`  Marked #${issueNumber} as done in docs/issues-priority.md and pushed`);
+        } catch {
+            console.warn(`  Marked #${issueNumber} as done in docs/issues-priority.md (push failed — commit manually)`);
+        }
     }
 }
 
