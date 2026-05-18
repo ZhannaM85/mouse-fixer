@@ -18,27 +18,48 @@ function parseIssueNumber(raw: string): number {
     return n;
 }
 
+function resolveNextIssue(cwd: string): number {
+    const filePath = join(cwd, 'docs', 'issues-priority.md');
+    if (!existsSync(filePath)) {
+        console.error('Error: docs/issues-priority.md not found.');
+        process.exit(1);
+    }
+    const lines = readFileSync(filePath, 'utf8').split('\n');
+    for (const line of lines) {
+        if (line.includes('~~')) continue;
+        const m = line.match(/\[#(\d+)\]/);
+        if (m) return parseInt(m[1], 10);
+    }
+    console.error('Error: No open issues found in docs/issues-priority.md');
+    process.exit(1);
+}
+
 function parseArgs(): { issueNumber: number; timeoutMs: number } {
     const args = process.argv.slice(2);
 
     if (args.includes('--help') || args.includes('-h') || args.length === 0) {
         console.log(`
 Usage: mouse-fixes <issue> [--timeout <seconds>]
+       mouse-fixes next   [--timeout <seconds>]
 
   <issue>              Issue number or full GitHub issue URL (required)
+  next                 Auto-pick the next open issue from docs/issues-priority.md
   --timeout <seconds>  Max Claude runtime in seconds (default: ${DEFAULT_TIMEOUT_S})
 
 Examples:
   mouse-fixes 38
   mouse-fixes https://github.com/owner/repo/issues/38
   mouse-fixes 49 --timeout 300
+  mouse-fixes next
 
 Run from inside the target git repository.
         `.trim());
         process.exit(0);
     }
 
-    const issueNumber = parseIssueNumber(args[0]);
+    const issueNumber = args[0] === 'next'
+        ? resolveNextIssue(process.cwd())
+        : parseIssueNumber(args[0]);
 
     let timeoutS = DEFAULT_TIMEOUT_S;
     const tIdx = args.indexOf('--timeout');
