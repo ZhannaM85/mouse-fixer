@@ -10,7 +10,7 @@ _These are standalone, low-risk, and unblock everything else._
 | # | Issue | Notes |
 |---|-------|-------|
 | ~~[#22](https://github.com/ZhannaM85/mouse-fixes/issues/22)~~ | ~~fix: rename package from `mouse-fixer` to `mouse-fixes`~~ | ~~Do first — affects npm publish and install instructions~~ |
-| [#30](https://github.com/ZhannaM85/mouse-fixes/issues/30) | fix: checkout main after PR is created | Affects every run; causes commits to land on wrong branch |
+| ~~[#30](https://github.com/ZhannaM85/mouse-fixes/issues/30)~~ | ~~fix: checkout main after PR is created~~ | ~~Affects every run; causes commits to land on wrong branch~~ |
 | [#27](https://github.com/ZhannaM85/mouse-fixes/issues/27) | docs: add hero image, repository topics, and expand README | No code deps; improves first impression before npm publish |
 | ~~[#31](https://github.com/ZhannaM85/mouse-fixes/issues/31)~~ | ~~feat: `mouse-fixes next` to auto-pick the next open issue~~ | ~~Small, self-contained; reduces friction~~ |
 | [#33](https://github.com/ZhannaM85/mouse-fixes/issues/33) | feat: `mouse-fixes start` to bootstrap docs/issues-priority.md | Self-contained; enables `next` in repos without a priority list |
