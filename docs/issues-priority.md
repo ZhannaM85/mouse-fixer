@@ -10,7 +10,7 @@ _These are standalone, low-risk, and unblock everything else._
 | # | Issue | Notes |
 |---|-------|-------|
 | [#22](https://github.com/ZhannaM85/mouse-fixes/issues/22) | fix: rename package from `mouse-fixer` to `mouse-fixes` | Do first — affects npm publish and install instructions |
-| [#27](https://github.com/ZhannaM85/mouse-fixes/issues/27) | docs: add hero image, repository topics, and expand README | No code deps; improves first impression before npm publish |
+| ~~[#27](https://github.com/ZhannaM85/mouse-fixes/issues/27)~~ | ~~docs: add hero image, repository topics, and expand README~~ | ~~No code deps; improves first impression before npm publish~~ |
 | [#5](https://github.com/ZhannaM85/mouse-fixes/issues/5) | feat: `--model` flag to select Claude model per run | Small, self-contained |
 | [#4](https://github.com/ZhannaM85/mouse-fixes/issues/4) | feat: `--max-turns` flag to cap token consumption | Small, self-contained |
 
