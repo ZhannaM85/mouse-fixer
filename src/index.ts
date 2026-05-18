@@ -8,6 +8,7 @@ import { detectRepo, slugify, getGitDiffStats, detectDefaultBranch } from './git
 import { spawnClaude } from './runner.js';
 
 const DEFAULT_TIMEOUT_S = 600; // 10 minutes
+const DEFAULT_MAX_TURNS = 50;
 
 function parseIssueNumber(raw: string): number {
     const urlMatch = raw.match(/\/issues\/(\d+)/);
@@ -36,7 +37,7 @@ function resolveNextIssue(cwd: string): number {
 }
 
 type Command =
-    | { kind: 'fix'; issueNumber: number; timeoutMs: number; model?: string }
+    | { kind: 'fix'; issueNumber: number; timeoutMs: number; model?: string; maxTurns: number }
     | { kind: 'start'; timeoutMs: number };
 
 function parseArgs(): Command {
@@ -44,8 +45,8 @@ function parseArgs(): Command {
 
     if (args.includes('--help') || args.includes('-h') || args.length === 0) {
         console.log(`
-Usage: mouse-fixes <issue> [--timeout <seconds>] [--model <model-id>]
-       mouse-fixes next   [--timeout <seconds>] [--model <model-id>]
+Usage: mouse-fixes <issue> [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
+       mouse-fixes next   [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
        mouse-fixes start  [--timeout <seconds>]
 
   <issue>              Issue number or full GitHub issue URL (required)
@@ -54,6 +55,7 @@ Usage: mouse-fixes <issue> [--timeout <seconds>] [--model <model-id>]
   --timeout <seconds>  Max Claude runtime in seconds (default: ${DEFAULT_TIMEOUT_S})
   --model <model-id>   Claude model to use (e.g. claude-haiku-4-5-20251001, claude-sonnet-4-6)
                        If omitted, the claude CLI uses its own default
+  --max-turns <n>      Max conversation turns Claude may take (default: ${DEFAULT_MAX_TURNS})
 
 Examples:
   mouse-fixes 38
@@ -61,6 +63,7 @@ Examples:
   mouse-fixes 49 --timeout 300
   mouse-fixes 42 --model claude-haiku-4-5-20251001
   mouse-fixes 43 --model claude-sonnet-4-6
+  mouse-fixes 42 --max-turns 30
   mouse-fixes next
   mouse-fixes start
 
@@ -91,6 +94,17 @@ Run from inside the target git repository.
         model = val;
     }
 
+    let maxTurns = DEFAULT_MAX_TURNS;
+    const mtIdx = args.indexOf('--max-turns');
+    if (mtIdx !== -1) {
+        const val = parseInt(args[mtIdx + 1], 10);
+        if (isNaN(val) || val <= 0) {
+            console.error('Error: --max-turns must be a positive integer.');
+            process.exit(1);
+        }
+        maxTurns = val;
+    }
+
     if (args[0] === 'start') {
         return { kind: 'start', timeoutMs: timeoutS * 1000 };
     }
@@ -99,7 +113,7 @@ Run from inside the target git repository.
         ? resolveNextIssue(process.cwd())
         : parseIssueNumber(args[0]);
 
-    return { kind: 'fix', issueNumber, timeoutMs: timeoutS * 1000, model };
+    return { kind: 'fix', issueNumber, timeoutMs: timeoutS * 1000, model, maxTurns };
 }
 
 function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, defaultBranch: string): string {
@@ -308,7 +322,7 @@ async function main(): Promise<void> {
         return;
     }
 
-    const { issueNumber, timeoutMs, model } = command;
+    const { issueNumber, timeoutMs, model, maxTurns } = command;
     const timer = new StepTimer();
 
     const modelLabel = model ? `  model: ${model}` : '';
@@ -351,13 +365,17 @@ async function main(): Promise<void> {
         const done = timer.start('Claude fix + git + PR');
         const defaultBranch = detectDefaultBranch();
         const prompt = buildPrompt(repo, issue, defaultBranch);
-        const result = await spawnClaude(prompt, process.cwd(), timeoutMs, model);
+        const result = await spawnClaude(prompt, process.cwd(), timeoutMs, model, maxTurns);
         output = result.summary;
         done(result.toolCallLog || undefined);
 
         if (result.timedOut) {
             console.warn('\n  Warning: Claude timed out.');
-        } else {
+        }
+        if (result.maxTurnsReached) {
+            console.warn(`\n  Warning: Claude reached the --max-turns limit (${maxTurns}). The fix may be incomplete.`);
+        }
+        if (!result.timedOut && !result.maxTurnsReached) {
             markIssueDone(issueNumber, process.cwd());
         }
 
