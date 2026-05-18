@@ -13,6 +13,7 @@ interface RunResult {
     summary: string;
     toolCallLog: string;
     timedOut: boolean;
+    maxTurnsReached: boolean;
     usage: UsageStats | null;
 }
 
@@ -82,13 +83,14 @@ export async function spawnClaude(
     prompt: string,
     cwd: string,
     timeoutMs: number,
-    model?: string
+    model?: string,
+    maxTurns: number = 50
 ): Promise<RunResult> {
     return new Promise((resolve, reject) => {
         const controller = new AbortController();
         const timeoutTimer = setTimeout(() => controller.abort(), timeoutMs);
 
-        const claudeArgs = ['-p', prompt, '--dangerously-skip-permissions', '--output-format', 'stream-json', '--verbose'];
+        const claudeArgs = ['-p', prompt, '--dangerously-skip-permissions', '--output-format', 'stream-json', '--verbose', '--max-turns', String(maxTurns)];
         if (model) claudeArgs.push('--model', model);
 
         const proc = spawn(
@@ -100,6 +102,7 @@ export async function spawnClaude(
         let finalResult = '(no summary)';
         let lastEventMs = Date.now();
         let timedOut = false;
+        let maxTurnsReached = false;
         const startMs = Date.now();
         let jsonBuffer = '';
         const allLines: string[] = [];
@@ -192,6 +195,7 @@ export async function spawnClaude(
 
                     if (event.type === 'result') {
                         if (typeof event.result === 'string') finalResult = event.result;
+                        if (event.subtype === 'error_max_turns') maxTurnsReached = true;
                         const u = event.usage as Record<string, number> | undefined;
                         if (u) {
                             usage = {
@@ -216,7 +220,7 @@ export async function spawnClaude(
             clearInterval(heartbeat);
             if (err.name === 'AbortError' || controller.signal.aborted) {
                 timedOut = true;
-                resolve({ summary: '[TIMED OUT] Claude did not finish within the allowed time.', toolCallLog: '', timedOut: true, usage: null });
+                resolve({ summary: '[TIMED OUT] Claude did not finish within the allowed time.', toolCallLog: '', timedOut: true, maxTurnsReached: false, usage: null });
             } else {
                 reject(err);
             }
@@ -225,7 +229,7 @@ export async function spawnClaude(
         proc.on('close', () => {
             clearTimeout(timeoutTimer);
             clearInterval(heartbeat);
-            resolve({ summary: finalResult, toolCallLog: allLines.join('\n'), timedOut, usage });
+            resolve({ summary: finalResult, toolCallLog: allLines.join('\n'), timedOut, maxTurnsReached, usage });
         });
     });
 }
