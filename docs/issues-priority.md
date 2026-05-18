@@ -14,7 +14,7 @@ _These are standalone, low-risk, and unblock everything else._
 | ~~[#27](https://github.com/ZhannaM85/mouse-fixes/issues/27)~~ | ~~docs: add hero image, repository topics, and expand README~~ | ~~No code deps; improves first impression before npm publish~~ |
 | ~~[#31](https://github.com/ZhannaM85/mouse-fixes/issues/31)~~ | ~~feat: `mouse-fixes next` to auto-pick the next open issue~~ | ~~Small, self-contained; reduces friction~~ |
 | ~~[#33](https://github.com/ZhannaM85/mouse-fixes/issues/33)~~ | ~~feat: `mouse-fixes start` to bootstrap docs/issues-priority.md~~ | ~~Self-contained; enables `next` in repos without a priority list~~ |
-| [#5](https://github.com/ZhannaM85/mouse-fixes/issues/5) | feat: `--model` flag to select Claude model per run | Small, self-contained |
+| ~~[#5](https://github.com/ZhannaM85/mouse-fixes/issues/5)~~ | ~~feat: `--model` flag to select Claude model per run~~ | ~~Small, self-contained~~ |
 | [#4](https://github.com/ZhannaM85/mouse-fixes/issues/4) | feat: `--max-turns` flag to cap token consumption | Small, self-contained |
 
 ---
