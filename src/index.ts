@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue } from './github.js';
-import { detectRepo, slugify, getGitDiffStats } from './git.js';
+import { detectRepo, slugify, getGitDiffStats, detectDefaultBranch } from './git.js';
 import { spawnClaude } from './runner.js';
 
 const DEFAULT_TIMEOUT_S = 600; // 10 minutes
@@ -75,7 +76,7 @@ Run from inside the target git repository.
     return { issueNumber, timeoutMs: timeoutS * 1000 };
 }
 
-function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }): string {
+function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, defaultBranch: string): string {
     const labelList = issue.labels.length ? issue.labels.join(', ') : 'none';
     const branch = `fix/${issue.number}-${slugify(issue.title)}`;
     return `You are an automated agent fixing GitHub issue #${issue.number} in repository ${repo}.
@@ -89,8 +90,8 @@ Description:
 ${issue.body || '(no description provided)'}
 
 Instructions:
-1. FIRST — reset to master and create the feature branch before touching any files:
-   git checkout master && git pull origin master && git checkout -b ${branch}
+1. FIRST — reset to ${defaultBranch} and create the feature branch before touching any files:
+   git checkout ${defaultBranch} && git pull origin ${defaultBranch} && git checkout -b ${branch}
 
 2. Read the relevant source files, understand the problem, and implement a minimal fix.
    Follow the existing code style and patterns in this repository.
@@ -108,6 +109,9 @@ Instructions:
       On Linux/Mac use: /tmp/pr-body.md
       Then run:
       gh pr create --title "Fix #${issue.number}: ${issue.title}" --body-file <temp-path>
+
+4. After the PR is open, return to ${defaultBranch}:
+   git checkout ${defaultBranch}
 
 Use this format for the PR body:
 
@@ -149,7 +153,14 @@ function markIssueDone(issueNumber: number, cwd: string): void {
 
     if (updated !== original) {
         writeFileSync(filePath, updated, 'utf8');
-        console.log(`  Marked #${issueNumber} as done in docs/issues-priority.md`);
+        try {
+            execSync('git add docs/issues-priority.md', { cwd, stdio: 'pipe' });
+            execSync(`git commit -m "docs: mark #${issueNumber} as done in issues-priority.md"`, { cwd, stdio: 'pipe' });
+            execSync('git push', { cwd, stdio: 'pipe' });
+            console.log(`  Marked #${issueNumber} as done in docs/issues-priority.md and pushed`);
+        } catch {
+            console.warn(`  Marked #${issueNumber} as done in docs/issues-priority.md (push failed — commit manually)`);
+        }
     }
 }
 
@@ -194,7 +205,8 @@ async function main(): Promise<void> {
     {
         console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
         const done = timer.start('Claude fix + git + PR');
-        const prompt = buildPrompt(repo, issue);
+        const defaultBranch = detectDefaultBranch();
+        const prompt = buildPrompt(repo, issue, defaultBranch);
         const result = await spawnClaude(prompt, process.cwd(), timeoutMs);
         output = result.summary;
         done(result.toolCallLog || undefined);
