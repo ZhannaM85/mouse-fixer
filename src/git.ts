@@ -46,3 +46,17 @@ export function slugify(title: string, maxLen = 40): string {
         .slice(0, maxLen)
         .replace(/-$/, '');
 }
+
+export function detectDefaultBranch(): string {
+    try {
+        const ref = exec('git symbolic-ref refs/remotes/origin/HEAD');
+        return ref.replace('refs/remotes/origin/', '');
+    } catch { /* fall through */ }
+    for (const branch of ['main', 'master']) {
+        try {
+            execSync(`git rev-parse --verify refs/remotes/origin/${branch}`, { encoding: 'utf8', cwd: process.cwd(), stdio: 'pipe' });
+            return branch;
+        } catch { /* try next */ }
+    }
+    return 'main';
+}
