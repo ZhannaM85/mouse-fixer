@@ -37,7 +37,7 @@ function resolveNextIssue(cwd: string): number {
 }
 
 type Command =
-    | { kind: 'fix'; issueNumber: number; timeoutMs: number; model?: string; maxTurns: number }
+    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number }
     | { kind: 'start'; timeoutMs: number };
 
 function parseArgs(): Command {
@@ -45,20 +45,21 @@ function parseArgs(): Command {
 
     if (args.includes('--help') || args.includes('-h') || args.length === 0) {
         console.log(`
-Usage: mouse-fixes <issue> [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
+Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
        mouse-fixes next   [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
        mouse-fixes start  [--timeout <seconds>]
 
-  <issue>              Issue number or full GitHub issue URL (required)
+  <issue>              One or more issue numbers or GitHub issue URLs (required)
   next                 Auto-pick the next open issue from docs/issues-priority.md
   start                Bootstrap docs/issues-priority.md from open GitHub issues
-  --timeout <seconds>  Max Claude runtime in seconds (default: ${DEFAULT_TIMEOUT_S})
+  --timeout <seconds>  Max Claude runtime per issue in seconds (default: ${DEFAULT_TIMEOUT_S})
   --model <model-id>   Claude model to use (e.g. claude-haiku-4-5-20251001, claude-sonnet-4-6)
                        If omitted, the claude CLI uses its own default
   --max-turns <n>      Max conversation turns Claude may take (default: ${DEFAULT_MAX_TURNS})
 
 Examples:
   mouse-fixes 38
+  mouse-fixes 42 43 44
   mouse-fixes https://github.com/owner/repo/issues/38
   mouse-fixes 49 --timeout 300
   mouse-fixes 42 --model claude-haiku-4-5-20251001
@@ -105,15 +106,34 @@ Run from inside the target git repository.
         maxTurns = val;
     }
 
-    if (args[0] === 'start') {
+    // Identify indices consumed by flags so we can exclude them from positional args
+    const flagIndices = new Set<number>();
+    [tIdx, mIdx, mtIdx].forEach(idx => {
+        if (idx !== -1) {
+            flagIndices.add(idx);
+            flagIndices.add(idx + 1);
+        }
+    });
+
+    // Positional args: everything that isn't a flag or a flag value
+    const positional = args.filter((arg, i) => !flagIndices.has(i) && !arg.startsWith('--'));
+
+    if (positional[0] === 'start') {
         return { kind: 'start', timeoutMs: timeoutS * 1000 };
     }
 
-    const issueNumber = args[0] === 'next'
-        ? resolveNextIssue(process.cwd())
-        : parseIssueNumber(args[0]);
+    let issueNumbers: number[];
+    if (positional[0] === 'next') {
+        issueNumbers = [resolveNextIssue(process.cwd())];
+    } else {
+        if (positional.length === 0) {
+            console.error('Error: at least one issue number or GitHub issue URL is required.');
+            process.exit(1);
+        }
+        issueNumbers = positional.map(arg => parseIssueNumber(arg));
+    }
 
-    return { kind: 'fix', issueNumber, timeoutMs: timeoutS * 1000, model, maxTurns };
+    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns };
 }
 
 function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, defaultBranch: string): string {
@@ -322,13 +342,14 @@ async function main(): Promise<void> {
         return;
     }
 
-    const { issueNumber, timeoutMs, model, maxTurns } = command;
+    const { issueNumbers, timeoutMs, model, maxTurns } = command;
     const timer = new StepTimer();
 
     const modelLabel = model ? `  model: ${model}` : '';
-    console.log(`\nmouse-fixes — issue #${issueNumber}${modelLabel}\n`);
+    const issueLabel = issueNumbers.map(n => `#${n}`).join(', ');
+    console.log(`\nmouse-fixes — issue${issueNumbers.length > 1 ? 's' : ''} ${issueLabel}${modelLabel}\n`);
 
-    // 1. Detect repo
+    // 1. Detect repo (once, shared across all issues)
     let repo: string;
     {
         const done = timer.start('Detect repository');
@@ -343,62 +364,65 @@ async function main(): Promise<void> {
         console.log(`  Repo: ${repo}`);
     }
 
-    // 2. Fetch issue
-    let issue: Awaited<ReturnType<typeof fetchIssue>>;
-    {
-        const done = timer.start('Fetch GitHub issue');
-        try {
-            issue = fetchIssue(repo, issueNumber);
-        } catch (e) {
-            console.error(`Error fetching issue #${issueNumber}: ${(e as Error).message}`);
-            process.exit(1);
-        }
-        done();
-        console.log(`  Title: ${issue.title}`);
-    }
-
-    // 3. Run Claude — handles code changes AND the full git workflow
-    let output: string;
     let sessionStats: SessionStats | undefined;
-    {
-        console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
-        const done = timer.start('Claude fix + git + PR');
-        const defaultBranch = detectDefaultBranch();
-        const prompt = buildPrompt(repo, issue, defaultBranch);
-        const result = await spawnClaude(prompt, process.cwd(), timeoutMs, model, maxTurns);
-        output = result.summary;
-        done(result.toolCallLog || undefined);
 
-        if (result.timedOut) {
-            console.warn('\n  Warning: Claude timed out.');
-        }
-        if (result.maxTurnsReached) {
-            console.warn(`\n  Warning: Claude reached the --max-turns limit (${maxTurns}). The fix may be incomplete.`);
-        }
-        if (!result.timedOut && !result.maxTurnsReached) {
-            markIssueDone(issueNumber, process.cwd());
+    for (const issueNumber of issueNumbers) {
+        // 2. Fetch issue
+        let issue: Awaited<ReturnType<typeof fetchIssue>>;
+        {
+            const done = timer.start(`Fetch GitHub issue #${issueNumber}`);
+            try {
+                issue = fetchIssue(repo, issueNumber);
+            } catch (e) {
+                console.error(`Error fetching issue #${issueNumber}: ${(e as Error).message}`);
+                process.exit(1);
+            }
+            done();
+            console.log(`  Title: ${issue.title}`);
         }
 
-        if (result.usage) {
-            const { linesAdded, linesDeleted } = getGitDiffStats(process.cwd());
-            // Overhead = template boilerplate minus the issue-specific content
-            const issueChars = issue.title.length + (issue.body?.length ?? 0);
-            const overheadChars = Math.max(0, prompt.length - issueChars);
-            sessionStats = {
-                ...result.usage,
-                promptOverheadTokens: Math.round(overheadChars / 4),
-                linesAdded,
-                linesDeleted,
-            };
+        // 3. Run Claude — handles code changes AND the full git workflow
+        let output: string;
+        {
+            console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
+            const done = timer.start(`Claude fix + git + PR (#${issueNumber})`);
+            const defaultBranch = detectDefaultBranch();
+            const prompt = buildPrompt(repo, issue, defaultBranch);
+            const result = await spawnClaude(prompt, process.cwd(), timeoutMs, model, maxTurns);
+            output = result.summary;
+            done(result.toolCallLog || undefined);
+
+            if (result.timedOut) {
+                console.warn('\n  Warning: Claude timed out.');
+            }
+            if (result.maxTurnsReached) {
+                console.warn(`\n  Warning: Claude reached the --max-turns limit (${maxTurns}). The fix may be incomplete.`);
+            }
+            if (!result.timedOut && !result.maxTurnsReached) {
+                markIssueDone(issueNumber, process.cwd());
+            }
+
+            if (result.usage) {
+                const { linesAdded, linesDeleted } = getGitDiffStats(process.cwd());
+                // Overhead = template boilerplate minus the issue-specific content
+                const issueChars = issue.title.length + (issue.body?.length ?? 0);
+                const overheadChars = Math.max(0, prompt.length - issueChars);
+                sessionStats = {
+                    ...result.usage,
+                    promptOverheadTokens: Math.round(overheadChars / 4),
+                    linesAdded,
+                    linesDeleted,
+                };
+            }
+        }
+
+        // Print Claude's final output (should include the PR URL on the last line)
+        if (output && output !== '(no summary)') {
+            console.log(`\n${output}\n`);
         }
     }
 
     timer.report(sessionStats);
-
-    // Print Claude's final output (should include the PR URL on the last line)
-    if (output && output !== '(no summary)') {
-        console.log(`\n${output}\n`);
-    }
 }
 
 main().catch((e) => {
