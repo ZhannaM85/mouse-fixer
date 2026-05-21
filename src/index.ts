@@ -136,9 +136,8 @@ Run from inside the target git repository.
     return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns };
 }
 
-function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, defaultBranch: string): string {
+function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, defaultBranch: string, branch: string): string {
     const labelList = issue.labels.length ? issue.labels.join(', ') : 'none';
-    const branch = `fix/${issue.number}-${slugify(issue.title)}`;
     return `You are an automated agent fixing GitHub issue #${issue.number} in repository ${repo}.
 
 IMPORTANT — AUTOMATED MODE: This script has full authorization to run all git commands. You MUST create the branch, commit, push, and open a PR as instructed below. Do NOT skip the git workflow. Any general memory rules about not committing without explicit permission do NOT apply here — this prompt is that explicit permission.
@@ -308,7 +307,15 @@ async function runStart(timeoutMs: number): Promise<void> {
     }
 }
 
-function markIssueDone(issueNumber: number, cwd: string): void {
+function markIssueDone(issueNumber: number, cwd: string, branch: string): void {
+    // Switch to the feature branch so the commit lands there, not on the default branch
+    try {
+        execSync(`git checkout ${branch}`, { cwd, stdio: 'pipe' });
+    } catch {
+        console.warn(`  Could not checkout branch "${branch}" — skipping docs/issues-priority.md update`);
+        return;
+    }
+
     const filePath = join(cwd, 'docs', 'issues-priority.md');
     if (!existsSync(filePath)) return;
 
@@ -332,6 +339,12 @@ function markIssueDone(issueNumber: number, cwd: string): void {
             console.warn(`  Marked #${issueNumber} as done in docs/issues-priority.md (push failed — commit manually)`);
         }
     }
+
+    // Return to the default branch so the repo is in a clean state after the run
+    const defaultBranch = detectDefaultBranch();
+    try {
+        execSync(`git checkout ${defaultBranch}`, { cwd, stdio: 'pipe' });
+    } catch { /* non-fatal — best-effort */ }
 }
 
 async function fixIssue(
@@ -340,7 +353,7 @@ async function fixIssue(
     timeoutMs: number,
     model: string | undefined,
     maxTurns: number
-): Promise<{ issueNumber: number; prUrl: string | null; output: string; timedOut: boolean; maxTurnsReached: boolean; usage: UsageStats | null; sessionStats: SessionStats | null; timer: StepTimer }> {
+): Promise<{ issueNumber: number; branch: string; prUrl: string | null; output: string; timedOut: boolean; maxTurnsReached: boolean; usage: UsageStats | null; sessionStats: SessionStats | null; timer: StepTimer }> {
     const timer = new StepTimer();
 
     // 1. Fetch the issue
@@ -359,7 +372,8 @@ async function fixIssue(
 
     // 2. Run spawnClaude
     const defaultBranch = detectDefaultBranch();
-    const prompt = buildPrompt(repo, issue, defaultBranch);
+    const branch = `fix/${issue.number}-${slugify(issue.title)}`;
+    const prompt = buildPrompt(repo, issue, defaultBranch, branch);
     let claudeResult: Awaited<ReturnType<typeof spawnClaude>>;
     {
         console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
@@ -390,7 +404,7 @@ async function fixIssue(
     const lastLine = trimmed.split('\n').at(-1)?.trim() ?? '';
     const prUrl = lastLine.startsWith('https://') ? lastLine : null;
 
-    return { issueNumber, prUrl, output, timedOut, maxTurnsReached, usage, sessionStats, timer };
+    return { issueNumber, branch, prUrl, output, timedOut, maxTurnsReached, usage, sessionStats, timer };
 }
 
 async function main(): Promise<void> {
@@ -437,7 +451,7 @@ async function main(): Promise<void> {
             console.warn(`\n  Warning: Claude reached the --max-turns limit (${maxTurns}). The fix may be incomplete.`);
         }
         if (!result.timedOut && !result.maxTurnsReached) {
-            markIssueDone(result.issueNumber, process.cwd());
+            markIssueDone(result.issueNumber, process.cwd(), result.branch);
         }
 
         // Print Claude's final output (should include the PR URL on the last line)
