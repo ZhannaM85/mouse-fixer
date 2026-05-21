@@ -31,14 +31,18 @@ _Natural next step: run several issues at once from a single invocation._
 ---
 
 ## Tier 3 — Safety & trust
-_Build user confidence before going fully autonomous: dry-run, pre-flight checks, approval gates, and recovery._
+_Build user confidence before going fully autonomous: config, dry-run, pre-flight checks, approval gates, cost controls, and recovery._
 
 | # | Issue | Notes |
 |---|-------|-------|
-| [#45](https://github.com/ZhannaM85/mouse-fixes/issues/45) | feat: pre-flight git safety checks before running Claude | Do first — prevents mid-run failures from bad repo state |
+| [#49](https://github.com/ZhannaM85/mouse-fixes/issues/49) | feat: repository configuration file (`.mouse-fixes.yml`) | Do first — other features in this tier read from it |
+| [#50](https://github.com/ZhannaM85/mouse-fixes/issues/50) | feat: persist structured run state for robust resume and analytics | Do second — required by #47 (resume) |
+| [#45](https://github.com/ZhannaM85/mouse-fixes/issues/45) | feat: pre-flight git safety checks before running Claude | Prevents mid-run failures from bad repo state |
 | [#44](https://github.com/ZhannaM85/mouse-fixes/issues/44) | feat: `--dry-run` mode to preview changes without pushing or opening a PR | Biggest adoption driver; depends on nothing |
 | [#46](https://github.com/ZhannaM85/mouse-fixes/issues/46) | feat: `--approve` flag for human approval checkpoints before push/PR | Bridges autonomous ↔ manual workflows |
-| [#47](https://github.com/ZhannaM85/mouse-fixes/issues/47) | feat: `mouse-fixes resume` to retry a failed or timed-out run | Addresses current timeout pain; self-contained |
+| [#47](https://github.com/ZhannaM85/mouse-fixes/issues/47) | feat: `mouse-fixes resume` to retry a failed or timed-out run | Depends on #50 (structured state) |
+| [#51](https://github.com/ZhannaM85/mouse-fixes/issues/51) | feat: `--max-cost` flag to cap spend per run | Reads from #49 config; essential before watch mode |
+| [#52](https://github.com/ZhannaM85/mouse-fixes/issues/52) | feat: isolated git worktree execution mode | Safer parallelism; reads `worktree` from #49 config |
 | [#48](https://github.com/ZhannaM85/mouse-fixes/issues/48) | feat: run lint, typecheck, and tests before opening PR | Keeps PRs clean; references #43 for log output |
 
 ---
@@ -68,7 +72,16 @@ _Allows triggering mouse-fixes from a chat message without touching the terminal
 
 ---
 
-## Tier 6 — Multi-agent pipeline (BA → Dev → QA)
+## Tier 6 — PR review
+_Expands the tool beyond issue-fixing; self-contained and can be done any time after Tier 3._
+
+| # | Issue | Notes |
+|---|-------|-------|
+| [#53](https://github.com/ZhannaM85/mouse-fixes/issues/53) | feat: `mouse-fixes review <PR>` to summarise and analyse a pull request | Self-contained; no dependencies |
+
+---
+
+## Tier 7 — Multi-agent pipeline (BA → Dev → QA)
 _Introduces specialized agent roles that hand off structured context between stages._
 
 | # | Issue | Notes |
@@ -80,7 +93,7 @@ _Introduces specialized agent roles that hand off structured context between sta
 
 ---
 
-## Tier 7 — Distribution
+## Tier 8 — Distribution
 _Packaging and CI setup. Do last — the tool should be stable before publishing._
 
 | # | Issue | Notes |
