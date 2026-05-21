@@ -25,7 +25,7 @@ _Natural next step: run several issues at once from a single invocation._
 | # | Issue | Notes |
 |---|-------|-------|
 | ~~[#13](https://github.com/ZhannaM85/mouse-fixes/issues/13)~~ | ~~feat: accept multiple issue numbers as CLI arguments~~ | ~~Start here — required by #14~~ |
-| [#14](https://github.com/ZhannaM85/mouse-fixes/issues/14) | feat: run multiple issues concurrently with `Promise.all` | Depends on #13 |
+| ~~[#14](https://github.com/ZhannaM85/mouse-fixes/issues/14)~~ | ~~feat: run multiple issues concurrently with `Promise.all`~~ | ~~Depends on #13~~ |
 | [#15](https://github.com/ZhannaM85/mouse-fixes/issues/15) | feat: prefix live output lines with `[#N]` for parallel runs | Depends on #14 |
 
 ---
