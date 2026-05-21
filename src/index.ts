@@ -387,7 +387,7 @@ async function fixIssue(
     // 3. Collect git diff stats
     let sessionStats: SessionStats | null = null;
     if (usage) {
-        const { linesAdded, linesDeleted } = getGitDiffStats(process.cwd());
+        const { linesAdded, linesDeleted } = getGitDiffStats(process.cwd(), branch);
         // Overhead = template boilerplate minus the issue-specific content
         const issueChars = issue.title.length + (issue.body?.length ?? 0);
         const overheadChars = Math.max(0, prompt.length - issueChars);

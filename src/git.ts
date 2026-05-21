@@ -4,17 +4,17 @@ function exec(cmd: string): string {
     return execSync(cmd, { encoding: 'utf8', cwd: process.cwd() }).trim();
 }
 
-export function getGitDiffStats(cwd: string): { linesAdded: number; linesDeleted: number } {
+export function getGitDiffStats(cwd: string, targetRef: string = 'HEAD'): { linesAdded: number; linesDeleted: number } {
     try {
         let base: string | null = null;
         for (const branch of ['master', 'main', 'origin/master', 'origin/main']) {
             try {
-                base = execSync(`git merge-base HEAD ${branch}`, { encoding: 'utf8', cwd }).trim();
+                base = execSync(`git merge-base ${targetRef} ${branch}`, { encoding: 'utf8', cwd }).trim();
                 break;
             } catch { /* try next */ }
         }
         if (!base) return { linesAdded: 0, linesDeleted: 0 };
-        const out = execSync(`git diff --numstat ${base} HEAD`, { encoding: 'utf8', cwd }).trim();
+        const out = execSync(`git diff --numstat ${base} ${targetRef}`, { encoding: 'utf8', cwd }).trim();
         if (!out) return { linesAdded: 0, linesDeleted: 0 };
         let linesAdded = 0;
         let linesDeleted = 0;
