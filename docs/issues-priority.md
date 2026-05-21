@@ -30,8 +30,21 @@ _Natural next step: run several issues at once from a single invocation._
 
 ---
 
-## Tier 3 — Watch mode
-_Enables autonomous polling: mouse-fixes runs continuously and picks up new issues._
+## Tier 3 — Safety & trust
+_Build user confidence before going fully autonomous: dry-run, pre-flight checks, approval gates, and recovery._
+
+| # | Issue | Notes |
+|---|-------|-------|
+| [#45](https://github.com/ZhannaM85/mouse-fixes/issues/45) | feat: pre-flight git safety checks before running Claude | Do first — prevents mid-run failures from bad repo state |
+| [#44](https://github.com/ZhannaM85/mouse-fixes/issues/44) | feat: `--dry-run` mode to preview changes without pushing or opening a PR | Biggest adoption driver; depends on nothing |
+| [#46](https://github.com/ZhannaM85/mouse-fixes/issues/46) | feat: `--approve` flag for human approval checkpoints before push/PR | Bridges autonomous ↔ manual workflows |
+| [#47](https://github.com/ZhannaM85/mouse-fixes/issues/47) | feat: `mouse-fixes resume` to retry a failed or timed-out run | Addresses current timeout pain; self-contained |
+| [#48](https://github.com/ZhannaM85/mouse-fixes/issues/48) | feat: run lint, typecheck, and tests before opening PR | Keeps PRs clean; references #43 for log output |
+
+---
+
+## Tier 4 — Watch mode
+_Enables autonomous polling: mouse-fixes runs continuously and picks up new issues. Do Tier 3 first._
 
 | # | Issue | Notes |
 |---|-------|-------|
@@ -42,7 +55,7 @@ _Enables autonomous polling: mouse-fixes runs continuously and picks up new issu
 
 ---
 
-## Tier 4 — Webhook server (Slack / Telegram triggers)
+## Tier 5 — Webhook server (Slack / Telegram triggers)
 _Allows triggering mouse-fixes from a chat message without touching the terminal._
 
 | # | Issue | Notes |
@@ -55,7 +68,7 @@ _Allows triggering mouse-fixes from a chat message without touching the terminal
 
 ---
 
-## Tier 5 — Multi-agent pipeline (BA → Dev → QA)
+## Tier 6 — Multi-agent pipeline (BA → Dev → QA)
 _Introduces specialized agent roles that hand off structured context between stages._
 
 | # | Issue | Notes |
@@ -67,7 +80,7 @@ _Introduces specialized agent roles that hand off structured context between sta
 
 ---
 
-## Tier 6 — Distribution
+## Tier 7 — Distribution
 _Packaging and CI setup. Do last — the tool should be stable before publishing._
 
 | # | Issue | Notes |
