@@ -352,7 +352,8 @@ async function fixIssue(
     repo: string,
     timeoutMs: number,
     model: string | undefined,
-    maxTurns: number
+    maxTurns: number,
+    prefix = ''
 ): Promise<{ issueNumber: number; branch: string; prUrl: string | null; output: string; timedOut: boolean; maxTurnsReached: boolean; usage: UsageStats | null; sessionStats: SessionStats | null; timer: StepTimer }> {
     const timer = new StepTimer();
 
@@ -378,7 +379,7 @@ async function fixIssue(
     {
         console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
         const done = timer.start(`Claude fix + git + PR (#${issueNumber})`);
-        claudeResult = await spawnClaude(prompt, process.cwd(), timeoutMs, model, maxTurns);
+        claudeResult = await spawnClaude(prompt, process.cwd(), timeoutMs, model, maxTurns, prefix);
         done(claudeResult.toolCallLog || undefined);
     }
 
@@ -439,7 +440,10 @@ async function main(): Promise<void> {
 
     // 2. Run all issues concurrently
     const results = await Promise.all(
-        issueNumbers.map(n => fixIssue(n, repo, timeoutMs, model, maxTurns))
+        issueNumbers.map(n => {
+            const prefix = issueNumbers.length > 1 ? `[#${n}] ` : '';
+            return fixIssue(n, repo, timeoutMs, model, maxTurns, prefix);
+        })
     );
 
     // 3. After all issues complete, print results and one stats table per issue
