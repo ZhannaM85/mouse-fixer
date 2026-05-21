@@ -35,7 +35,7 @@ _Enables autonomous polling: mouse-fixes runs continuously and picks up new issu
 
 | # | Issue | Notes |
 |---|-------|-------|
-| [#16](https://github.com/ZhannaM85/mouse-fixes/issues/16) | feat: `--watch` flag with polling loop | Core of watch mode |
+| ~~[#16](https://github.com/ZhannaM85/mouse-fixes/issues/16)~~ | ~~feat: `--watch` flag with polling loop~~ | ~~Core of watch mode~~ |
 | [#17](https://github.com/ZhannaM85/mouse-fixes/issues/17) | feat: persist processed issue IDs to avoid re-processing | Depends on #16 |
 | [#18](https://github.com/ZhannaM85/mouse-fixes/issues/18) | feat: `--label` filter for `--watch` mode | Depends on #16 |
 
