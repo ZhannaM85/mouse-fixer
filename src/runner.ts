@@ -84,7 +84,8 @@ export async function spawnClaude(
     cwd: string,
     timeoutMs: number,
     model?: string,
-    maxTurns: number = 50
+    maxTurns: number = 50,
+    prefix = ''
 ): Promise<RunResult> {
     return new Promise((resolve, reject) => {
         const controller = new AbortController();
@@ -121,10 +122,10 @@ export async function spawnClaude(
                         ? changed.split('\n').filter(Boolean).map(f => f.trim()).join(', ')
                         : 'none yet';
                     process.stdout.write(
-                        `  [${elapsedLabel(startMs)}]  ${'(thinking…)'.padEnd(12)}  changed: ${filesSummary}\n`
+                        prefix + `  [${elapsedLabel(startMs)}]  ${'(thinking…)'.padEnd(12)}  changed: ${filesSummary}\n`
                     );
                 } catch {
-                    process.stdout.write(`  [${elapsedLabel(startMs)}]  (thinking…)\n`);
+                    process.stdout.write(prefix + `  [${elapsedLabel(startMs)}]  (thinking…)\n`);
                 }
             }
         }, 30_000);
@@ -151,14 +152,14 @@ export async function spawnClaude(
                                 const first = block.text.split(/[.\n]/).map(s => s.trim()).find(s => s.length > 10);
                                 if (first) {
                                     const textLine = `  [${t}]  · ${first}`;
-                                    process.stdout.write(textLine + '\n');
+                                    process.stdout.write(prefix + textLine + '\n');
                                     allLines.push(textLine);
                                     lastEventMs = Date.now();
                                 }
                             }
                             if (block.type === 'tool_use') {
                                 const callLine = formatToolCall(block, t);
-                                process.stdout.write(callLine + '\n');
+                                process.stdout.write(prefix + callLine + '\n');
                                 allLines.push(callLine);
                                 lastEventMs = Date.now();
                                 toolCallCount++;
@@ -184,7 +185,7 @@ export async function spawnClaude(
                                     if (summary) {
                                         const indent = `  [${pending.t}]  `;
                                         const resultLine = `${indent}${'↳'.padEnd(12)}  ${summary}`;
-                                        process.stdout.write(resultLine + '\n');
+                                        process.stdout.write(prefix + resultLine + '\n');
                                         allLines.push(resultLine);
                                         lastEventMs = Date.now();
                                     }
