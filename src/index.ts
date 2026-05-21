@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue, fetchAllIssues, Issue } from './github.js';
 import { detectRepo, slugify, getGitDiffStats, detectDefaultBranch } from './git.js';
-import { spawnClaude } from './runner.js';
+import { spawnClaude, UsageStats } from './runner.js';
 
 const DEFAULT_TIMEOUT_S = 600; // 10 minutes
 const DEFAULT_MAX_TURNS = 50;
@@ -334,6 +334,65 @@ function markIssueDone(issueNumber: number, cwd: string): void {
     }
 }
 
+async function fixIssue(
+    issueNumber: number,
+    repo: string,
+    timeoutMs: number,
+    model: string | undefined,
+    maxTurns: number
+): Promise<{ issueNumber: number; prUrl: string | null; output: string; timedOut: boolean; maxTurnsReached: boolean; usage: UsageStats | null; sessionStats: SessionStats | null; timer: StepTimer }> {
+    const timer = new StepTimer();
+
+    // 1. Fetch the issue
+    let issue: Awaited<ReturnType<typeof fetchIssue>>;
+    {
+        const done = timer.start(`Fetch GitHub issue #${issueNumber}`);
+        try {
+            issue = fetchIssue(repo, issueNumber);
+        } catch (e) {
+            console.error(`Error fetching issue #${issueNumber}: ${(e as Error).message}`);
+            process.exit(1);
+        }
+        done();
+        console.log(`  Title: ${issue.title}`);
+    }
+
+    // 2. Run spawnClaude
+    const defaultBranch = detectDefaultBranch();
+    const prompt = buildPrompt(repo, issue, defaultBranch);
+    let claudeResult: Awaited<ReturnType<typeof spawnClaude>>;
+    {
+        console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
+        const done = timer.start(`Claude fix + git + PR (#${issueNumber})`);
+        claudeResult = await spawnClaude(prompt, process.cwd(), timeoutMs, model, maxTurns);
+        done(claudeResult.toolCallLog || undefined);
+    }
+
+    const { summary: output, timedOut, maxTurnsReached, usage } = claudeResult;
+
+    // 3. Collect git diff stats
+    let sessionStats: SessionStats | null = null;
+    if (usage) {
+        const { linesAdded, linesDeleted } = getGitDiffStats(process.cwd());
+        // Overhead = template boilerplate minus the issue-specific content
+        const issueChars = issue.title.length + (issue.body?.length ?? 0);
+        const overheadChars = Math.max(0, prompt.length - issueChars);
+        sessionStats = {
+            ...usage,
+            promptOverheadTokens: Math.round(overheadChars / 4),
+            linesAdded,
+            linesDeleted,
+        };
+    }
+
+    // Extract PR URL from last line of output
+    const trimmed = output.trim();
+    const lastLine = trimmed.split('\n').at(-1)?.trim() ?? '';
+    const prUrl = lastLine.startsWith('https://') ? lastLine : null;
+
+    return { issueNumber, prUrl, output, timedOut, maxTurnsReached, usage, sessionStats, timer };
+}
+
 async function main(): Promise<void> {
     const command = parseArgs();
 
@@ -364,65 +423,30 @@ async function main(): Promise<void> {
         console.log(`  Repo: ${repo}`);
     }
 
-    let sessionStats: SessionStats | undefined;
+    // 2. Run all issues concurrently
+    const results = await Promise.all(
+        issueNumbers.map(n => fixIssue(n, repo, timeoutMs, model, maxTurns))
+    );
 
-    for (const issueNumber of issueNumbers) {
-        // 2. Fetch issue
-        let issue: Awaited<ReturnType<typeof fetchIssue>>;
-        {
-            const done = timer.start(`Fetch GitHub issue #${issueNumber}`);
-            try {
-                issue = fetchIssue(repo, issueNumber);
-            } catch (e) {
-                console.error(`Error fetching issue #${issueNumber}: ${(e as Error).message}`);
-                process.exit(1);
-            }
-            done();
-            console.log(`  Title: ${issue.title}`);
+    // 3. After all issues complete, print results and one stats table per issue
+    for (const result of results) {
+        if (result.timedOut) {
+            console.warn('\n  Warning: Claude timed out.');
         }
-
-        // 3. Run Claude — handles code changes AND the full git workflow
-        let output: string;
-        {
-            console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
-            const done = timer.start(`Claude fix + git + PR (#${issueNumber})`);
-            const defaultBranch = detectDefaultBranch();
-            const prompt = buildPrompt(repo, issue, defaultBranch);
-            const result = await spawnClaude(prompt, process.cwd(), timeoutMs, model, maxTurns);
-            output = result.summary;
-            done(result.toolCallLog || undefined);
-
-            if (result.timedOut) {
-                console.warn('\n  Warning: Claude timed out.');
-            }
-            if (result.maxTurnsReached) {
-                console.warn(`\n  Warning: Claude reached the --max-turns limit (${maxTurns}). The fix may be incomplete.`);
-            }
-            if (!result.timedOut && !result.maxTurnsReached) {
-                markIssueDone(issueNumber, process.cwd());
-            }
-
-            if (result.usage) {
-                const { linesAdded, linesDeleted } = getGitDiffStats(process.cwd());
-                // Overhead = template boilerplate minus the issue-specific content
-                const issueChars = issue.title.length + (issue.body?.length ?? 0);
-                const overheadChars = Math.max(0, prompt.length - issueChars);
-                sessionStats = {
-                    ...result.usage,
-                    promptOverheadTokens: Math.round(overheadChars / 4),
-                    linesAdded,
-                    linesDeleted,
-                };
-            }
+        if (result.maxTurnsReached) {
+            console.warn(`\n  Warning: Claude reached the --max-turns limit (${maxTurns}). The fix may be incomplete.`);
+        }
+        if (!result.timedOut && !result.maxTurnsReached) {
+            markIssueDone(result.issueNumber, process.cwd());
         }
 
         // Print Claude's final output (should include the PR URL on the last line)
-        if (output && output !== '(no summary)') {
-            console.log(`\n${output}\n`);
+        if (result.output && result.output !== '(no summary)') {
+            console.log(`\n${result.output}\n`);
         }
-    }
 
-    timer.report(sessionStats);
+        result.timer.report(result.sessionStats ?? undefined);
+    }
 }
 
 main().catch((e) => {
