@@ -36,9 +36,12 @@ function resolveNextIssue(cwd: string): number {
     process.exit(1);
 }
 
+const DEFAULT_INTERVAL_S = 30;
+
 type Command =
     | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number }
-    | { kind: 'start'; timeoutMs: number };
+    | { kind: 'start'; timeoutMs: number }
+    | { kind: 'watch'; intervalSeconds: number; timeoutMs: number };
 
 function parseArgs(): Command {
     const args = process.argv.slice(2);
@@ -48,10 +51,13 @@ function parseArgs(): Command {
 Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
        mouse-fixes next   [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
        mouse-fixes start  [--timeout <seconds>]
+       mouse-fixes --watch [--interval <seconds>] [--timeout <seconds>]
 
   <issue>              One or more issue numbers or GitHub issue URLs (required)
   next                 Auto-pick the next open issue from docs/issues-priority.md
   start                Bootstrap docs/issues-priority.md from open GitHub issues
+  --watch              Poll for new issues and fix them automatically
+  --interval <seconds> Polling interval for --watch (default: ${DEFAULT_INTERVAL_S})
   --timeout <seconds>  Max Claude runtime per issue in seconds (default: ${DEFAULT_TIMEOUT_S})
   --model <model-id>   Claude model to use (e.g. claude-haiku-4-5-20251001, claude-sonnet-4-6)
                        If omitted, the claude CLI uses its own default
@@ -67,6 +73,8 @@ Examples:
   mouse-fixes 42 --max-turns 30
   mouse-fixes next
   mouse-fixes start
+  mouse-fixes --watch
+  mouse-fixes --watch --interval 60
 
 Run from inside the target git repository.
         `.trim());
@@ -104,6 +112,22 @@ Run from inside the target git repository.
             process.exit(1);
         }
         maxTurns = val;
+    }
+
+    // --watch mode
+    const watchIdx = args.indexOf('--watch');
+    if (watchIdx !== -1) {
+        let intervalSeconds = DEFAULT_INTERVAL_S;
+        const iIdx = args.indexOf('--interval');
+        if (iIdx !== -1) {
+            const val = parseInt(args[iIdx + 1], 10);
+            if (isNaN(val) || val <= 0) {
+                console.error('Error: --interval must be a positive integer (seconds).');
+                process.exit(1);
+            }
+            intervalSeconds = val;
+        }
+        return { kind: 'watch', intervalSeconds, timeoutMs: timeoutS * 1000 };
     }
 
     // Identify indices consumed by flags so we can exclude them from positional args
@@ -408,11 +432,75 @@ async function fixIssue(
     return { issueNumber, branch, prUrl, output, timedOut, maxTurnsReached, usage, sessionStats, timer };
 }
 
+async function runWatch(intervalSeconds: number, timeoutMs: number): Promise<void> {
+    // Detect repo once up front
+    let repo: string;
+    try {
+        repo = detectRepo();
+    } catch (e) {
+        console.error(`Error: ${(e as Error).message}`);
+        console.error('Run mouse-fixes from inside a git repository with a GitHub remote.');
+        process.exit(1);
+    }
+
+    console.log(`mouse-fixes watching for new issues (interval: ${intervalSeconds}s) — Ctrl-C to stop`);
+
+    // Handle Ctrl-C gracefully
+    process.on('SIGINT', () => {
+        console.log('\nStopping watch.');
+        process.exit(0);
+    });
+
+    let lastCheckedAt = new Date().toISOString();
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+        // Poll for open issues with creation timestamps
+        let issueData: Array<{ number: number; createdAt: string }> = [];
+        try {
+            const raw = execSync(
+                `gh issue list --repo ${repo} --state open --json number,createdAt --limit 50`,
+                { encoding: 'utf8' }
+            ).trim();
+            issueData = JSON.parse(raw);
+        } catch (e) {
+            console.error(`  Error fetching issues: ${(e as Error).message}`);
+        }
+
+        // Filter to issues created after lastCheckedAt
+        const newIssues = issueData.filter(i => i.createdAt > lastCheckedAt);
+        const newCount = newIssues.length;
+
+        // Update checkpoint before fixing (so a crash/timeout doesn't re-process)
+        lastCheckedAt = new Date().toISOString();
+
+        if (newCount > 0) {
+            // Run fixes concurrently when there are multiple new issues
+            await Promise.all(
+                newIssues.map(i => {
+                    const prefix = newCount > 1 ? `[#${i.number}] ` : '';
+                    return fixIssue(i.number, repo, timeoutMs, undefined, DEFAULT_MAX_TURNS, prefix);
+                })
+            );
+        }
+
+        console.log(`  [${new Date().toLocaleTimeString()}]  checked — ${newCount} new issue(s)`);
+
+        // Wait for the next interval
+        await new Promise<void>(resolve => setTimeout(resolve, intervalSeconds * 1000));
+    }
+}
+
 async function main(): Promise<void> {
     const command = parseArgs();
 
     if (command.kind === 'start') {
         await runStart(command.timeoutMs);
+        return;
+    }
+
+    if (command.kind === 'watch') {
+        await runWatch(command.intervalSeconds, command.timeoutMs);
         return;
     }
 
