@@ -230,7 +230,7 @@ Use this format for the PR body:
 
 Closes #${issue.number}
 
-🤖 Generated with [mouse-fixes](https://github.com/ZhannaM85/mouse-fixes)
+🐭 Generated with [mouse-fixes](https://github.com/ZhannaM85/mouse-fixes)
 
 After creating the PR, output its URL as the last line of your response.`;
 }
