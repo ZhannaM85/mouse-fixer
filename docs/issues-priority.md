@@ -35,7 +35,7 @@ _Build user confidence before going fully autonomous: config, dry-run, pre-fligh
 
 | # | Issue | Notes |
 |---|-------|-------|
-| [#49](https://github.com/ZhannaM85/mouse-fixes/issues/49) | feat: repository configuration file (`.mouse-fixes.yml`) | Do first — other features in this tier read from it |
+| ~~[#49](https://github.com/ZhannaM85/mouse-fixes/issues/49)~~ | ~~feat: repository configuration file (`.mouse-fixes.yml`)~~ | ~~Do first — other features in this tier read from it~~ |
 | [#50](https://github.com/ZhannaM85/mouse-fixes/issues/50) | feat: persist structured run state for robust resume and analytics | Do second — required by #47 (resume) |
 | [#45](https://github.com/ZhannaM85/mouse-fixes/issues/45) | feat: pre-flight git safety checks before running Claude | Prevents mid-run failures from bad repo state |
 | [#44](https://github.com/ZhannaM85/mouse-fixes/issues/44) | feat: `--dry-run` mode to preview changes without pushing or opening a PR | Biggest adoption driver; depends on nothing |

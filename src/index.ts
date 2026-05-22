@@ -6,6 +6,7 @@ import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue, fetchAllIssues, Issue } from './github.js';
 import { detectRepo, slugify, getGitDiffStats, detectDefaultBranch } from './git.js';
 import { spawnClaude, UsageStats } from './runner.js';
+import { loadConfig, MouseFixesConfig, CONFIG_FILENAME } from './config.js';
 
 const DEFAULT_TIMEOUT_S = 600; // 10 minutes
 const DEFAULT_MAX_TURNS = 50;
@@ -43,7 +44,7 @@ type Command =
     | { kind: 'start'; timeoutMs: number }
     | { kind: 'watch'; intervalSeconds: number; timeoutMs: number };
 
-function parseArgs(): Command {
+function parseArgs(config: MouseFixesConfig = {}): Command {
     const args = process.argv.slice(2);
 
     if (args.includes('--help') || args.includes('-h') || args.length === 0) {
@@ -62,6 +63,17 @@ Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id
   --model <model-id>   Claude model to use (e.g. claude-haiku-4-5-20251001, claude-sonnet-4-6)
                        If omitted, the claude CLI uses its own default
   --max-turns <n>      Max conversation turns Claude may take (default: ${DEFAULT_MAX_TURNS})
+
+Config file (${CONFIG_FILENAME}):
+  Place a ${CONFIG_FILENAME} file in the repo root to set per-repo defaults.
+  CLI flags always override config file values.
+  Supported keys: model, maxTurns, defaultBaseBranch, branchPrefix, logDir
+  Example:
+    model: claude-sonnet-4-6
+    maxTurns: 30
+    defaultBaseBranch: main
+    branchPrefix: fix/
+    logDir: logs/
 
 Examples:
   mouse-fixes 38
@@ -92,7 +104,8 @@ Run from inside the target git repository.
         timeoutS = val;
     }
 
-    let model: string | undefined;
+    // model: CLI --model overrides config, config overrides undefined (Claude picks its own default)
+    let model: string | undefined = config.model;
     const mIdx = args.indexOf('--model');
     if (mIdx !== -1) {
         const val = args[mIdx + 1];
@@ -103,7 +116,8 @@ Run from inside the target git repository.
         model = val;
     }
 
-    let maxTurns = DEFAULT_MAX_TURNS;
+    // maxTurns: CLI --max-turns overrides config, config overrides DEFAULT_MAX_TURNS
+    let maxTurns = config.maxTurns ?? DEFAULT_MAX_TURNS;
     const mtIdx = args.indexOf('--max-turns');
     if (mtIdx !== -1) {
         const val = parseInt(args[mtIdx + 1], 10);
@@ -377,7 +391,9 @@ async function fixIssue(
     timeoutMs: number,
     model: string | undefined,
     maxTurns: number,
-    prefix = ''
+    prefix = '',
+    configBaseBranch?: string,
+    branchPrefix = 'fix/'
 ): Promise<{ issueNumber: number; branch: string; prUrl: string | null; output: string; timedOut: boolean; maxTurnsReached: boolean; usage: UsageStats | null; sessionStats: SessionStats | null; timer: StepTimer }> {
     const timer = new StepTimer();
 
@@ -396,8 +412,9 @@ async function fixIssue(
     }
 
     // 2. Run spawnClaude
-    const defaultBranch = detectDefaultBranch();
-    const branch = `fix/${issue.number}-${slugify(issue.title)}`;
+    // Config-supplied base branch takes precedence over auto-detection
+    const defaultBranch = configBaseBranch ?? detectDefaultBranch();
+    const branch = `${branchPrefix}${issue.number}-${slugify(issue.title)}`;
     const prompt = buildPrompt(repo, issue, defaultBranch, branch);
     let claudeResult: Awaited<ReturnType<typeof spawnClaude>>;
     {
@@ -432,7 +449,7 @@ async function fixIssue(
     return { issueNumber, branch, prUrl, output, timedOut, maxTurnsReached, usage, sessionStats, timer };
 }
 
-async function runWatch(intervalSeconds: number, timeoutMs: number): Promise<void> {
+async function runWatch(intervalSeconds: number, timeoutMs: number, config: MouseFixesConfig = {}): Promise<void> {
     // Detect repo once up front
     let repo: string;
     try {
@@ -479,7 +496,14 @@ async function runWatch(intervalSeconds: number, timeoutMs: number): Promise<voi
             await Promise.all(
                 newIssues.map(i => {
                     const prefix = newCount > 1 ? `[#${i.number}] ` : '';
-                    return fixIssue(i.number, repo, timeoutMs, undefined, DEFAULT_MAX_TURNS, prefix);
+                    return fixIssue(
+                        i.number, repo, timeoutMs,
+                        config.model,
+                        config.maxTurns ?? DEFAULT_MAX_TURNS,
+                        prefix,
+                        config.defaultBaseBranch,
+                        config.branchPrefix
+                    );
                 })
             );
         }
@@ -492,7 +516,9 @@ async function runWatch(intervalSeconds: number, timeoutMs: number): Promise<voi
 }
 
 async function main(): Promise<void> {
-    const command = parseArgs();
+    // Load .mouse-fixes.yml from the repo root (silently ignored if missing)
+    const config = loadConfig();
+    const command = parseArgs(config);
 
     if (command.kind === 'start') {
         await runStart(command.timeoutMs);
@@ -500,7 +526,7 @@ async function main(): Promise<void> {
     }
 
     if (command.kind === 'watch') {
-        await runWatch(command.intervalSeconds, command.timeoutMs);
+        await runWatch(command.intervalSeconds, command.timeoutMs, config);
         return;
     }
 
@@ -530,7 +556,11 @@ async function main(): Promise<void> {
     const results = await Promise.all(
         issueNumbers.map(n => {
             const prefix = issueNumbers.length > 1 ? `[#${n}] ` : '';
-            return fixIssue(n, repo, timeoutMs, model, maxTurns, prefix);
+            return fixIssue(
+                n, repo, timeoutMs, model, maxTurns, prefix,
+                config.defaultBaseBranch,
+                config.branchPrefix
+            );
         })
     );
 
