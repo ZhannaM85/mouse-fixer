@@ -4,7 +4,8 @@ import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue, fetchAllIssues, Issue } from './github.js';
-import { detectRepo, slugify, getGitDiffStats, detectDefaultBranch } from './git.js';
+import { detectRepo, slugify, getGitDiffStats, getChangedFiles, detectDefaultBranch } from './git.js';
+import { createState, updateState, RunStage } from './state.js';
 import { spawnClaude, UsageStats } from './runner.js';
 import { loadConfig, MouseFixesConfig, CONFIG_FILENAME } from './config.js';
 
@@ -385,6 +386,16 @@ function markIssueDone(issueNumber: number, cwd: string, branch: string): void {
     } catch { /* non-fatal — best-effort */ }
 }
 
+/** Update state silently — state is auxiliary and must not crash the main run. */
+function tryUpdateState(
+    cwd: string,
+    issueNumber: number,
+    stage: RunStage,
+    partial: Parameters<typeof updateState>[3] = {}
+): void {
+    try { updateState(cwd, issueNumber, stage, partial); } catch { /* non-fatal */ }
+}
+
 async function fixIssue(
     issueNumber: number,
     repo: string,
@@ -396,14 +407,21 @@ async function fixIssue(
     branchPrefix = 'fix/'
 ): Promise<{ issueNumber: number; branch: string; prUrl: string | null; output: string; timedOut: boolean; maxTurnsReached: boolean; usage: UsageStats | null; sessionStats: SessionStats | null; timer: StepTimer }> {
     const timer = new StepTimer();
+    const cwd = process.cwd();
+
+    // Create initial state file (stage: pending) before any work begins.
+    // Non-fatal if it fails (e.g. permissions).
+    try { createState(cwd, issueNumber, repo, model, maxTurns); } catch { /* non-fatal */ }
 
     // 1. Fetch the issue
     let issue: Awaited<ReturnType<typeof fetchIssue>>;
     {
+        tryUpdateState(cwd, issueNumber, 'fetching-issue');
         const done = timer.start(`Fetch GitHub issue #${issueNumber}`);
         try {
             issue = fetchIssue(repo, issueNumber);
         } catch (e) {
+            tryUpdateState(cwd, issueNumber, 'failed');
             console.error(`Error fetching issue #${issueNumber}: ${(e as Error).message}`);
             process.exit(1);
         }
@@ -418,9 +436,11 @@ async function fixIssue(
     const prompt = buildPrompt(repo, issue, defaultBranch, branch);
     let claudeResult: Awaited<ReturnType<typeof spawnClaude>>;
     {
+        // Update state with the computed branch and advance to claude-running
+        tryUpdateState(cwd, issueNumber, 'claude-running', { branch });
         console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
         const done = timer.start(`Claude fix + git + PR (#${issueNumber})`);
-        claudeResult = await spawnClaude(prompt, process.cwd(), timeoutMs, model, maxTurns, prefix);
+        claudeResult = await spawnClaude(prompt, cwd, timeoutMs, model, maxTurns, prefix);
         done(claudeResult.toolCallLog || undefined);
     }
 
@@ -429,7 +449,7 @@ async function fixIssue(
     // 3. Collect git diff stats
     let sessionStats: SessionStats | null = null;
     if (usage) {
-        const { linesAdded, linesDeleted } = getGitDiffStats(process.cwd(), branch);
+        const { linesAdded, linesDeleted } = getGitDiffStats(cwd, branch);
         // Overhead = template boilerplate minus the issue-specific content
         const issueChars = issue.title.length + (issue.body?.length ?? 0);
         const overheadChars = Math.max(0, prompt.length - issueChars);
@@ -445,6 +465,17 @@ async function fixIssue(
     const trimmed = output.trim();
     const lastLine = trimmed.split('\n').at(-1)?.trim() ?? '';
     const prUrl = lastLine.startsWith('https://') ? lastLine : null;
+
+    // Populate filesChanged from git and finalize state (done or failed).
+    // Failed/timed-out runs leave the state file intact for inspection.
+    const filesChanged = getChangedFiles(cwd, branch);
+    const finalStage: RunStage = (timedOut || maxTurnsReached) ? 'failed' : 'done';
+    tryUpdateState(cwd, issueNumber, finalStage, {
+        filesChanged,
+        prUrl,
+        timedOut,
+        costUsd: usage?.totalCostUsd ?? null,
+    });
 
     return { issueNumber, branch, prUrl, output, timedOut, maxTurnsReached, usage, sessionStats, timer };
 }
