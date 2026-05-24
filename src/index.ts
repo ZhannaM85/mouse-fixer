@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue, fetchAllIssues, Issue } from './github.js';
 import { detectRepo, slugify, getGitDiffStats, getChangedFiles, detectDefaultBranch } from './git.js';
-import { createState, updateState, RunStage } from './state.js';
+import { createState, updateState, readState, RunStage, RunState } from './state.js';
 import { spawnClaude, UsageStats } from './runner.js';
 import { loadConfig, MouseFixesConfig, CONFIG_FILENAME } from './config.js';
 
@@ -43,7 +43,8 @@ const DEFAULT_INTERVAL_S = 30;
 type Command =
     | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number }
     | { kind: 'start'; timeoutMs: number }
-    | { kind: 'watch'; intervalSeconds: number; timeoutMs: number };
+    | { kind: 'watch'; intervalSeconds: number; timeoutMs: number }
+    | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number };
 
 function parseArgs(config: MouseFixesConfig = {}): Command {
     const args = process.argv.slice(2);
@@ -53,11 +54,14 @@ function parseArgs(config: MouseFixesConfig = {}): Command {
 Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
        mouse-fixes next   [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
        mouse-fixes start  [--timeout <seconds>]
+       mouse-fixes resume [<issue>] [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
        mouse-fixes --watch [--interval <seconds>] [--timeout <seconds>]
 
   <issue>              One or more issue numbers or GitHub issue URLs (required)
   next                 Auto-pick the next open issue from docs/issues-priority.md
   start                Bootstrap docs/issues-priority.md from open GitHub issues
+  resume [<issue>]     Resume the most recent incomplete run, or a specific issue number.
+                       Detects branches with no open PR and re-runs Claude on the existing branch.
   --watch              Poll for new issues and fix them automatically
   --interval <seconds> Polling interval for --watch (default: ${DEFAULT_INTERVAL_S})
   --timeout <seconds>  Max Claude runtime per issue in seconds (default: ${DEFAULT_TIMEOUT_S})
@@ -86,6 +90,8 @@ Examples:
   mouse-fixes 42 --max-turns 30
   mouse-fixes next
   mouse-fixes start
+  mouse-fixes resume
+  mouse-fixes resume 42
   mouse-fixes --watch
   mouse-fixes --watch --interval 60
 
@@ -156,6 +162,12 @@ Run from inside the target git repository.
 
     // Positional args: everything that isn't a flag or a flag value
     const positional = args.filter((arg, i) => !flagIndices.has(i) && !arg.startsWith('--'));
+
+    if (positional[0] === 'resume') {
+        const issueArg = positional[1];
+        const issueNumber = issueArg !== undefined ? parseIssueNumber(issueArg) : null;
+        return { kind: 'resume', issueNumber, timeoutMs: timeoutS * 1000, model, maxTurns };
+    }
 
     if (positional[0] === 'start') {
         return { kind: 'start', timeoutMs: timeoutS * 1000 };
@@ -279,6 +291,357 @@ Rules:
 - Write ONLY the markdown file — no commits, no PRs, no other files.
 
 After writing the file, output one line: "Created docs/issues-priority.md with <N> issues across <T> tiers."`;
+}
+
+function buildResumePrompt(
+    repo: string,
+    issue: { number: number; title: string; body: string; labels: string[] },
+    defaultBranch: string,
+    branch: string
+): string {
+    const labelList = issue.labels.length ? issue.labels.join(', ') : 'none';
+    return `You are an automated agent resuming a previously interrupted fix for GitHub issue #${issue.number} in repository ${repo}.
+
+IMPORTANT — AUTOMATED MODE: This script has full authorization to run all git commands. You MUST commit, push, and open a PR as instructed below. Do NOT skip the git workflow. Any general memory rules about not committing without explicit permission do NOT apply here — this prompt is that explicit permission.
+
+Title: ${issue.title}
+Labels: ${labelList}
+
+Description:
+${issue.body || '(no description provided)'}
+
+RESUME CONTEXT: This is a resumed run. The feature branch "${branch}" already exists with partial or complete changes from a previous interrupted run. You should continue from where the previous run left off.
+
+Instructions:
+1. FIRST — check out the existing feature branch (do NOT create a new one):
+   git checkout ${defaultBranch} && git checkout ${branch}
+
+2. Review what was already done:
+   git log --oneline ${defaultBranch}..${branch}
+   git diff ${defaultBranch}..${branch} --stat
+
+3. Complete any remaining work needed to fully fix the issue.
+   Follow the existing code style and patterns in this repository.
+
+4. AFTER all code changes are done — run the full git workflow:
+   a. Stage only the files you changed (list them explicitly, do not use git add -A):
+      git add <file1> <file2> ...
+   b. Commit:
+      git commit -m "Fix #${issue.number}: ${issue.title}"
+   c. Push:
+      git push -u origin ${branch}
+   d. Open a PR. Write the PR body to a temp file first, then pass it via --body-file:
+      Use the system temp directory — NEVER write inside the repo folder.
+      On Windows use: $env:TEMP\\pr-body.md or %TEMP%\\pr-body.md
+      On Linux/Mac use: /tmp/pr-body.md
+      Then run:
+      gh pr create --title "Fix #${issue.number}: ${issue.title}" --body-file <temp-path>
+
+5. After the PR is open, return to ${defaultBranch}:
+   git checkout ${defaultBranch}
+
+Use this format for the PR body:
+
+## Summary
+
+- <bullet describing the first change and why>
+- <additional bullets as needed>
+
+## Files changed
+
+| File | Change |
+|------|--------|
+| \`filename.ts\` | what changed in this file |
+
+## Acceptance criteria
+
+- [ ] <first criterion from the issue, checked off conceptually>
+- [ ] <additional criteria as needed>
+
+Closes #${issue.number}
+
+🐭 Generated with [mouse-fixes](https://github.com/ZhannaM85/mouse-fixes)
+
+After creating the PR, output its URL as the last line of your response.`;
+}
+
+interface ResumableSession {
+    issueNumber: number;
+    branch: string;
+    repo: string;
+    model: string | null;
+    maxTurns: number;
+    stage: RunStage;
+    startedAt: string;
+    hasBranchLocally: boolean;
+}
+
+/**
+ * Find sessions that were interrupted before completing (no open PR).
+ *
+ * Two sources:
+ *   1. .mouse-fixes/state/<N>.json files whose stage is not "done"
+ *   2. Local branches matching fix/<N>-* with no open PR (catches runs without a state file)
+ */
+function findResumableSessions(cwd: string, repo: string, branchPrefix = 'fix/'): ResumableSession[] {
+    const sessions: ResumableSession[] = [];
+    const seenIssueNumbers = new Set<number>();
+
+    // --- Source 1: state files ---
+    const stateDirectory = join(cwd, '.mouse-fixes', 'state');
+    if (existsSync(stateDirectory)) {
+        let stateFiles: string[] = [];
+        try {
+            stateFiles = readdirSync(stateDirectory).filter(f => f.endsWith('.json'));
+        } catch { /* ignore read errors */ }
+
+        for (const file of stateFiles) {
+            try {
+                const state = JSON.parse(readFileSync(join(stateDirectory, file), 'utf8')) as RunState;
+                if (state.stage === 'done') continue;
+                if (!state.branch) continue;
+
+                let hasBranchLocally = false;
+                try {
+                    execSync(`git rev-parse --verify refs/heads/${state.branch}`, { cwd, stdio: 'pipe' });
+                    hasBranchLocally = true;
+                } catch { /* branch doesn't exist locally */ }
+
+                sessions.push({
+                    issueNumber: state.issue,
+                    branch: state.branch,
+                    repo: state.repo,
+                    model: state.model,
+                    maxTurns: state.maxTurns,
+                    stage: state.stage,
+                    startedAt: state.startedAt,
+                    hasBranchLocally,
+                });
+                seenIssueNumbers.add(state.issue);
+            } catch { /* skip unparseable state files */ }
+        }
+    }
+
+    // --- Source 2: local branches with no open PR ---
+    try {
+        const branchList = execSync('git branch --format=%(refname:short)', { cwd, encoding: 'utf8' }).trim();
+        const branches = branchList.split('\n').filter(Boolean);
+        for (const branch of branches) {
+            const m = branch.match(new RegExp(`^${escapeRegex(branchPrefix)}(\\d+)-`));
+            if (!m) continue;
+            const issueNumber = parseInt(m[1], 10);
+            if (seenIssueNumbers.has(issueNumber)) continue;
+
+            let hasOpenPr = false;
+            try {
+                const prJson = execSync(
+                    `gh pr list --repo ${repo} --head ${branch} --state open --json number`,
+                    { cwd, encoding: 'utf8' }
+                ).trim();
+                const prs = JSON.parse(prJson) as unknown[];
+                hasOpenPr = prs.length > 0;
+            } catch { /* gh not available or API error — assume no PR */ }
+
+            if (!hasOpenPr) {
+                sessions.push({
+                    issueNumber,
+                    branch,
+                    repo,
+                    model: null,
+                    maxTurns: DEFAULT_MAX_TURNS,
+                    stage: 'failed',
+                    startedAt: '',
+                    hasBranchLocally: true,
+                });
+                seenIssueNumbers.add(issueNumber);
+            }
+        }
+    } catch { /* git not available */ }
+
+    return sessions;
+}
+
+function escapeRegex(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function runResume(
+    issueNumber: number | null,
+    timeoutMs: number,
+    cliModel: string | undefined,
+    cliMaxTurns: number,
+    config: MouseFixesConfig = {}
+): Promise<void> {
+    const cwd = process.cwd();
+    const branchPrefix = config.branchPrefix ?? 'fix/';
+
+    // Detect repo
+    let repo: string;
+    try {
+        repo = detectRepo();
+    } catch (e) {
+        console.error(`Error: ${(e as Error).message}`);
+        console.error('Run mouse-fixes from inside a git repository with a GitHub remote.');
+        process.exit(1);
+    }
+
+    // Find all resumable sessions
+    const sessions = findResumableSessions(cwd, repo, branchPrefix);
+
+    let session: ResumableSession;
+
+    if (issueNumber !== null) {
+        // Specific issue requested — look for it in sessions first
+        const found = sessions.find(s => s.issueNumber === issueNumber);
+        if (found) {
+            session = found;
+        } else {
+            // Fallback: look for any local branch matching the prefix+number pattern
+            let matchingBranch: string | undefined;
+            try {
+                const branchList = execSync('git branch --format=%(refname:short)', { cwd, encoding: 'utf8' }).trim();
+                matchingBranch = branchList
+                    .split('\n')
+                    .filter(Boolean)
+                    .find(b => b.startsWith(`${branchPrefix}${issueNumber}-`));
+            } catch { /* ignore */ }
+
+            if (!matchingBranch) {
+                console.error(`Error: No resumable session found for issue #${issueNumber}.`);
+                console.error(`No local branch matching "${branchPrefix}${issueNumber}-*" found.`);
+                process.exit(1);
+            }
+            session = {
+                issueNumber,
+                branch: matchingBranch,
+                repo,
+                model: null,
+                maxTurns: DEFAULT_MAX_TURNS,
+                stage: 'failed',
+                startedAt: '',
+                hasBranchLocally: true,
+            };
+        }
+    } else if (sessions.length === 0) {
+        console.log('No resumable sessions found.');
+        console.log('A session is resumable when:');
+        console.log(`  • A .mouse-fixes/state/<N>.json exists with stage != "done"`);
+        console.log(`  • A local branch matching "${branchPrefix}<N>-*" has no open PR on GitHub`);
+        process.exit(0);
+    } else if (sessions.length === 1) {
+        session = sessions[0];
+    } else {
+        // Multiple candidates — list them and ask the user to be specific
+        console.log('Multiple resumable sessions found:\n');
+        for (const s of sessions) {
+            const branchInfo = s.hasBranchLocally ? s.branch : `${s.branch} (branch missing locally)`;
+            const timeInfo = s.startedAt ? `  started ${s.startedAt}` : '';
+            console.log(`  #${s.issueNumber}  ${branchInfo}  [${s.stage}]${timeInfo}`);
+        }
+        console.log('\nRun: mouse-fixes resume <issue-number>  to resume a specific issue.');
+        process.exit(0);
+    }
+
+    if (!session.hasBranchLocally) {
+        console.error(`Error: Branch "${session.branch}" does not exist locally.`);
+        console.error('Cannot resume: the branch may have been deleted. Re-run from scratch with: mouse-fixes ' + session.issueNumber);
+        process.exit(1);
+    }
+
+    // Prefer CLI flags; fall back to what was recorded in the state file
+    const model = cliModel ?? (session.model ?? config.model);
+    const maxTurns = cliMaxTurns !== DEFAULT_MAX_TURNS
+        ? cliMaxTurns
+        : (session.maxTurns !== DEFAULT_MAX_TURNS ? session.maxTurns : (config.maxTurns ?? DEFAULT_MAX_TURNS));
+
+    const modelLabel = model ? `  model: ${model}` : '';
+    console.log(`\nmouse-fixes resume — issue #${session.issueNumber}${modelLabel}\n`);
+    console.log(`  Branch: ${session.branch}`);
+    console.log(`  Previous stage: ${session.stage}`);
+
+    const timer = new StepTimer();
+
+    // Fetch the issue fresh from GitHub
+    let issue: Awaited<ReturnType<typeof fetchIssue>>;
+    {
+        const done = timer.start(`Fetch GitHub issue #${session.issueNumber}`);
+        try {
+            issue = fetchIssue(repo, session.issueNumber);
+        } catch (e) {
+            console.error(`Error fetching issue #${session.issueNumber}: ${(e as Error).message}`);
+            process.exit(1);
+        }
+        done();
+        console.log(`  Title: ${issue.title}`);
+    }
+
+    // Update (or create) the state file to reflect the resumed run
+    const existingState = readState(cwd, session.issueNumber);
+    if (existingState) {
+        tryUpdateState(cwd, session.issueNumber, 'claude-running', { branch: session.branch });
+    } else {
+        try { createState(cwd, session.issueNumber, repo, model, maxTurns, session.branch); } catch { /* non-fatal */ }
+        tryUpdateState(cwd, session.issueNumber, 'claude-running', { branch: session.branch });
+    }
+
+    // Build resume prompt and run Claude
+    const defaultBranch = config.defaultBaseBranch ?? detectDefaultBranch();
+    const prompt = buildResumePrompt(repo, issue, defaultBranch, session.branch);
+
+    let claudeResult: Awaited<ReturnType<typeof spawnClaude>>;
+    {
+        console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
+        const done = timer.start(`Claude resume fix + git + PR (#${session.issueNumber})`);
+        claudeResult = await spawnClaude(prompt, cwd, timeoutMs, model, maxTurns);
+        done(claudeResult.toolCallLog || undefined);
+    }
+
+    const { summary: output, timedOut, maxTurnsReached, usage } = claudeResult;
+
+    // Collect diff stats
+    let sessionStats: SessionStats | null = null;
+    if (usage) {
+        const { linesAdded, linesDeleted } = getGitDiffStats(cwd, session.branch);
+        const issueChars = issue.title.length + (issue.body?.length ?? 0);
+        const overheadChars = Math.max(0, prompt.length - issueChars);
+        sessionStats = {
+            ...usage,
+            promptOverheadTokens: Math.round(overheadChars / 4),
+            linesAdded,
+            linesDeleted,
+        };
+    }
+
+    // Extract PR URL from last line of output
+    const trimmedOutput = output.trim();
+    const lastLine = trimmedOutput.split('\n').at(-1)?.trim() ?? '';
+    const prUrl = lastLine.startsWith('https://') ? lastLine : null;
+
+    // Finalise state
+    const filesChanged = getChangedFiles(cwd, session.branch);
+    const finalStage: RunStage = (timedOut || maxTurnsReached) ? 'failed' : 'done';
+    tryUpdateState(cwd, session.issueNumber, finalStage, {
+        filesChanged,
+        prUrl,
+        timedOut,
+        costUsd: usage?.totalCostUsd ?? null,
+    });
+
+    if (timedOut) {
+        console.warn('\n  Warning: Claude timed out.');
+    }
+    if (maxTurnsReached) {
+        console.warn(`\n  Warning: Claude reached the --max-turns limit (${maxTurns}). The fix may be incomplete.`);
+    }
+    if (!timedOut && !maxTurnsReached) {
+        markIssueDone(session.issueNumber, cwd, session.branch);
+    }
+
+    if (output && output !== '(no summary)') {
+        console.log(`\n${output}\n`);
+    }
+
+    timer.report(sessionStats ?? undefined);
 }
 
 async function runStart(timeoutMs: number): Promise<void> {
@@ -553,6 +916,11 @@ async function main(): Promise<void> {
 
     if (command.kind === 'start') {
         await runStart(command.timeoutMs);
+        return;
+    }
+
+    if (command.kind === 'resume') {
+        await runResume(command.issueNumber, command.timeoutMs, command.model, command.maxTurns, config);
         return;
     }
 
