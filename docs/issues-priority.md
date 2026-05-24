@@ -37,7 +37,7 @@ _Build user confidence before going fully autonomous: config, dry-run, pre-fligh
 |---|-------|-------|
 | ~~[#55](https://github.com/ZhannaM85/mouse-fixes/issues/55)~~ | ~~docs: replace robot emoji with mouse emoji in generated PR footer~~ | ~~One-liner quick win~~ |
 | ~~[#49](https://github.com/ZhannaM85/mouse-fixes/issues/49)~~ | ~~feat: repository configuration file (`.mouse-fixes.yml`)~~ | ~~Do first — other features in this tier read from it~~ |
-| [#50](https://github.com/ZhannaM85/mouse-fixes/issues/50) | feat: persist structured run state for robust resume and analytics | Required by #47 (resume) |
+| ~~[#50](https://github.com/ZhannaM85/mouse-fixes/issues/50)~~ | ~~feat: persist structured run state for robust resume and analytics~~ | ~~Required by #47 (resume)~~ |
 | [#45](https://github.com/ZhannaM85/mouse-fixes/issues/45) | feat: pre-flight git safety checks before running Claude | Prevents mid-run failures from bad repo state |
 | [#44](https://github.com/ZhannaM85/mouse-fixes/issues/44) | feat: `--dry-run` mode to preview changes without pushing or opening a PR | Biggest adoption driver; depends on nothing |
 | [#46](https://github.com/ZhannaM85/mouse-fixes/issues/46) | feat: `--approve` flag for human approval checkpoints before push/PR | Bridges autonomous ↔ manual workflows |
