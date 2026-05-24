@@ -41,7 +41,7 @@ _Build user confidence before going fully autonomous: config, dry-run, pre-fligh
 | [#45](https://github.com/ZhannaM85/mouse-fixes/issues/45) | feat: pre-flight git safety checks before running Claude | Prevents mid-run failures from bad repo state |
 | [#44](https://github.com/ZhannaM85/mouse-fixes/issues/44) | feat: `--dry-run` mode to preview changes without pushing or opening a PR | Biggest adoption driver; depends on nothing |
 | [#46](https://github.com/ZhannaM85/mouse-fixes/issues/46) | feat: `--approve` flag for human approval checkpoints before push/PR | Bridges autonomous ↔ manual workflows |
-| [#47](https://github.com/ZhannaM85/mouse-fixes/issues/47) | feat: `mouse-fixes resume` to retry a failed or timed-out run | Depends on #50 (structured state) |
+| ~~[#47](https://github.com/ZhannaM85/mouse-fixes/issues/47)~~ | ~~feat: `mouse-fixes resume` to retry a failed or timed-out run~~ | ~~Depends on #50 (structured state)~~ |
 | [#51](https://github.com/ZhannaM85/mouse-fixes/issues/51) | feat: `--max-cost` flag to cap spend per run | Reads from #49 config; essential before watch mode |
 | [#52](https://github.com/ZhannaM85/mouse-fixes/issues/52) | feat: isolated git worktree execution mode | Safer parallelism; reads `worktree` from #49 config |
 | [#48](https://github.com/ZhannaM85/mouse-fixes/issues/48) | feat: run lint, typecheck, and tests before opening PR | Keeps PRs clean; references #43 for log output |
