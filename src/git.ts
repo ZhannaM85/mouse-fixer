@@ -4,6 +4,23 @@ function exec(cmd: string): string {
     return execSync(cmd, { encoding: 'utf8', cwd: process.cwd() }).trim();
 }
 
+export function getChangedFiles(cwd: string, targetRef: string = 'HEAD'): string[] {
+    try {
+        let base: string | null = null;
+        for (const branch of ['master', 'main', 'origin/master', 'origin/main']) {
+            try {
+                base = execSync(`git merge-base ${targetRef} ${branch}`, { encoding: 'utf8', cwd }).trim();
+                break;
+            } catch { /* try next */ }
+        }
+        if (!base) return [];
+        const out = execSync(`git diff --name-only ${base} ${targetRef}`, { encoding: 'utf8', cwd }).trim();
+        return out ? out.split('\n').filter(Boolean) : [];
+    } catch {
+        return [];
+    }
+}
+
 export function getGitDiffStats(cwd: string, targetRef: string = 'HEAD'): { linesAdded: number; linesDeleted: number } {
     try {
         let base: string | null = null;
