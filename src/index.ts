@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue, fetchAllIssues, Issue } from './github.js';
 import { detectRepo, slugify, getGitDiffStats, getChangedFiles, detectDefaultBranch } from './git.js';
-import { createState, updateState, readState, RunStage, RunState } from './state.js';
-import { spawnClaude, UsageStats } from './runner.js';
+import { createState, updateState, readState, RunStage, RunState, FailureReason } from './state.js';
+import { spawnClaude, UsageStats, runPostMortem } from './runner.js';
 import { loadConfig, MouseFixesConfig, CONFIG_FILENAME } from './config.js';
 
 const DEFAULT_TIMEOUT_S = 600; // 10 minutes
@@ -620,12 +620,37 @@ async function runResume(
     // Finalise state
     const filesChanged = getChangedFiles(cwd, session.branch);
     const finalStage: RunStage = (timedOut || maxTurnsReached) ? 'failed' : 'done';
-    tryUpdateState(cwd, session.issueNumber, finalStage, {
-        filesChanged,
-        prUrl,
-        timedOut,
-        costUsd: usage?.totalCostUsd ?? null,
-    });
+    const failureReason: FailureReason =
+        timedOut ? 'timedOut' : maxTurnsReached ? 'maxTurnsReached' : null;
+
+    if (finalStage === 'failed') {
+        tryUpdateState(cwd, session.issueNumber, finalStage, {
+            filesChanged,
+            prUrl,
+            failureReason,
+            costUsd: usage?.totalCostUsd ?? null,
+            outputLog: claudeResult.toolCallLog || null,
+        });
+
+        // Post-mortem diagnosis on failure (non-fatal)
+        try {
+            console.log('  Running post-mortem diagnosis…');
+            const postMortem = await runPostMortem(claudeResult.toolCallLog, issue.title, issue.body, cwd);
+            if (postMortem) {
+                tryUpdateState(cwd, session.issueNumber, 'failed', {
+                    diagnosis: postMortem.diagnosis,
+                    issueSuggestions: postMortem.issueSuggestions,
+                });
+            }
+        } catch { /* non-fatal */ }
+    } else {
+        tryUpdateState(cwd, session.issueNumber, finalStage, {
+            filesChanged,
+            prUrl,
+            failureReason,
+            costUsd: usage?.totalCostUsd ?? null,
+        });
+    }
 
     if (timedOut) {
         console.warn('\n  Warning: Claude timed out.');
@@ -833,12 +858,38 @@ async function fixIssue(
     // Failed/timed-out runs leave the state file intact for inspection.
     const filesChanged = getChangedFiles(cwd, branch);
     const finalStage: RunStage = (timedOut || maxTurnsReached) ? 'failed' : 'done';
-    tryUpdateState(cwd, issueNumber, finalStage, {
-        filesChanged,
-        prUrl,
-        timedOut,
-        costUsd: usage?.totalCostUsd ?? null,
-    });
+    const failureReason: FailureReason =
+        timedOut ? 'timedOut' : maxTurnsReached ? 'maxTurnsReached' : null;
+
+    if (finalStage === 'failed') {
+        // Persist failure metadata and the captured output log for inspection / post-mortem
+        tryUpdateState(cwd, issueNumber, finalStage, {
+            filesChanged,
+            prUrl,
+            failureReason,
+            costUsd: usage?.totalCostUsd ?? null,
+            outputLog: claudeResult.toolCallLog || null,
+        });
+
+        // Post-mortem: a short, cheap Claude call to diagnose the failure (non-fatal)
+        try {
+            console.log('  Running post-mortem diagnosis…');
+            const postMortem = await runPostMortem(claudeResult.toolCallLog, issue.title, issue.body, cwd);
+            if (postMortem) {
+                tryUpdateState(cwd, issueNumber, 'failed', {
+                    diagnosis: postMortem.diagnosis,
+                    issueSuggestions: postMortem.issueSuggestions,
+                });
+            }
+        } catch { /* non-fatal — post-mortem must never crash the main run */ }
+    } else {
+        tryUpdateState(cwd, issueNumber, finalStage, {
+            filesChanged,
+            prUrl,
+            failureReason,
+            costUsd: usage?.totalCostUsd ?? null,
+        });
+    }
 
     return { issueNumber, branch, prUrl, output, timedOut, maxTurnsReached, usage, sessionStats, timer };
 }
