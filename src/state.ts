@@ -11,6 +11,12 @@ export type RunStage =
     | 'done'
     | 'failed';
 
+/**
+ * Structured reason a run did not complete successfully.
+ * Replaces the former boolean `timedOut` field.
+ */
+export type FailureReason = 'timedOut' | 'maxTurnsReached' | 'error' | null;
+
 export interface RunState {
     issue: number;
     branch: string;
@@ -22,8 +28,15 @@ export interface RunState {
     maxTurns: number;
     filesChanged: string[];
     prUrl: string | null;
-    timedOut: boolean;
+    /** Structured failure reason; null when the run succeeded or is still in progress. */
+    failureReason: FailureReason;
     costUsd: number | null;
+    /** Full formatted output log from the failed run; null on success. */
+    outputLog: string | null;
+    /** Post-mortem diagnosis of what Claude was doing when the run stopped; null on success. */
+    diagnosis: string | null;
+    /** Actionable suggestions for improving the GitHub issue so the next run succeeds; null on success. */
+    issueSuggestions: string[] | null;
 }
 
 function stateDir(cwd: string): string {
@@ -63,8 +76,11 @@ export function createState(
         maxTurns,
         filesChanged: [],
         prUrl: null,
-        timedOut: false,
+        failureReason: null,
         costUsd: null,
+        outputLog: null,
+        diagnosis: null,
+        issueSuggestions: null,
     };
     writeFileSync(statePath(cwd, issueNumber), JSON.stringify(state, null, 2) + '\n', 'utf8');
     return state;

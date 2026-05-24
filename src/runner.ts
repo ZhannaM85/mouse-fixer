@@ -221,7 +221,8 @@ export async function spawnClaude(
             clearInterval(heartbeat);
             if (err.name === 'AbortError' || controller.signal.aborted) {
                 timedOut = true;
-                resolve({ summary: '[TIMED OUT] Claude did not finish within the allowed time.', toolCallLog: '', timedOut: true, maxTurnsReached: false, usage: null });
+                // Include lines captured so far so the output log is useful for post-mortem
+                resolve({ summary: '[TIMED OUT] Claude did not finish within the allowed time.', toolCallLog: allLines.join('\n'), timedOut: true, maxTurnsReached: false, usage: null });
             } else {
                 reject(err);
             }
@@ -233,4 +234,60 @@ export async function spawnClaude(
             resolve({ summary: finalResult, toolCallLog: allLines.join('\n'), timedOut, maxTurnsReached, usage });
         });
     });
+}
+
+export interface PostMortemResult {
+    diagnosis: string;
+    issueSuggestions: string[];
+}
+
+/**
+ * Run a short, separate Claude call to diagnose a failed run and suggest issue improvements.
+ *
+ * Uses a fast/cheap model with a low turn cap so it completes quickly.
+ * Returns null (non-fatally) if the call fails, times out, or produces unparseable output.
+ */
+export async function runPostMortem(
+    outputLog: string,
+    issueTitle: string,
+    issueBody: string,
+    cwd: string,
+): Promise<PostMortemResult | null> {
+    const prompt = `You are reviewing a failed automated code-fix run for a GitHub issue.
+
+Issue title: ${issueTitle}
+
+Issue body:
+${issueBody || '(no description provided)'}
+
+Run output log (tool calls and agent text captured during the failed run):
+${outputLog || '(no output captured)'}
+
+Analyze what happened and respond with ONLY a JSON object — no markdown, no code fences, nothing else:
+{
+  "diagnosis": "<2-4 sentences describing what the agent was doing when it stopped, which tools it called last, and where it got stuck>",
+  "issueSuggestions": [
+    "<actionable suggestion 1 for rewriting the issue so the next automated run succeeds>",
+    "<actionable suggestion 2>",
+    "<actionable suggestion 3>"
+  ]
+}`;
+
+    try {
+        // Use haiku for speed and cost-efficiency; cap at 10 turns; 60 s timeout
+        const result = await spawnClaude(prompt, cwd, 60_000, 'claude-haiku-4-5-20251001', 10);
+        const text = result.summary.trim();
+        // Extract the first JSON object from the response (Claude may add surrounding text)
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) return null;
+        const parsed = JSON.parse(jsonMatch[0]) as { diagnosis?: unknown; issueSuggestions?: unknown };
+        if (typeof parsed.diagnosis !== 'string' || !Array.isArray(parsed.issueSuggestions)) return null;
+        return {
+            diagnosis: parsed.diagnosis,
+            issueSuggestions: (parsed.issueSuggestions as unknown[]).filter((s): s is string => typeof s === 'string'),
+        };
+    } catch {
+        // Post-mortem failure must never crash the main run
+        return null;
+    }
 }
