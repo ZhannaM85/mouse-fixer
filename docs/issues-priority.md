@@ -9,6 +9,7 @@ _These are standalone, low-risk, and unblock everything else._
 
 | # | Issue | Notes |
 |---|-------|-------|
+| [#68](https://github.com/ZhannaM85/mouse-fixes/issues/68) | fix: remove dead RunStage values (committing, pushing, opening-pr) | Tiny cleanup; misleads anyone reading the type |
 | ~~[#22](https://github.com/ZhannaM85/mouse-fixes/issues/22)~~ | ~~fix: rename package from `mouse-fixer` to `mouse-fixes`~~ | ~~Do first — affects npm publish and install instructions~~ |
 | ~~[#30](https://github.com/ZhannaM85/mouse-fixes/issues/30)~~ | ~~fix: checkout main after PR is created~~ | ~~Affects every run; causes commits to land on wrong branch~~ |
 | ~~[#27](https://github.com/ZhannaM85/mouse-fixes/issues/27)~~ | ~~docs: add hero image, repository topics, and expand README~~ | ~~No code deps; improves first impression before npm publish~~ |
@@ -39,7 +40,11 @@ _Build user confidence before going fully autonomous: config, dry-run, pre-fligh
 | ~~[#49](https://github.com/ZhannaM85/mouse-fixes/issues/49)~~ | ~~feat: repository configuration file (`.mouse-fixes.yml`)~~ | ~~Do first — other features in this tier read from it~~ |
 | ~~[#50](https://github.com/ZhannaM85/mouse-fixes/issues/50)~~ | ~~feat: persist structured run state for robust resume and analytics~~ | ~~Required by #47 (resume)~~ |
 | ~~[#60](https://github.com/ZhannaM85/mouse-fixes/issues/60)~~ | ~~feat: enrich failed-run state file with output log, diagnosis, and issue improvement suggestions~~ | ~~Depends on #50 ✅; complements #43~~ |
-| [#45](https://github.com/ZhannaM85/mouse-fixes/issues/45) | feat: pre-flight git safety checks before running Claude | Prevents mid-run failures from bad repo state |
+| [#63](https://github.com/ZhannaM85/mouse-fixes/issues/63) | fix: `mouse-fixes next` re-picks already-addressed issues | Pull main + check GitHub before resolving next issue |
+| [#64](https://github.com/ZhannaM85/mouse-fixes/issues/64) | fix: resume treats stale state files as resumable even when PR is merged | Check GitHub for merged PR before surfacing a session |
+| [#66](https://github.com/ZhannaM85/mouse-fixes/issues/66) | fix: getChangedFiles/getGitDiffStats hardcode base branch names | Pass detectDefaultBranch() through; affects diff stats on non-main repos |
+| [#67](https://github.com/ZhannaM85/mouse-fixes/issues/67) | fix: PR URL silently lost when Claude adds trailing text after the URL | Scan all lines with regex instead of last-line heuristic |
+| [#45](https://github.com/ZhannaM85/mouse-fixes/issues/45) | feat: pre-flight git safety checks before running Claude | Prevents mid-run failures from bad repo state; covers branch-already-exists (#45 AC) |
 | [#44](https://github.com/ZhannaM85/mouse-fixes/issues/44) | feat: `--dry-run` mode to preview changes without pushing or opening a PR | Biggest adoption driver; depends on nothing |
 | [#46](https://github.com/ZhannaM85/mouse-fixes/issues/46) | feat: `--approve` flag for human approval checkpoints before push/PR | Bridges autonomous ↔ manual workflows |
 | ~~[#47](https://github.com/ZhannaM85/mouse-fixes/issues/47)~~ | ~~feat: `mouse-fixes resume` to retry a failed or timed-out run~~ | ~~Depends on #50 (structured state)~~ |
@@ -57,6 +62,7 @@ _Enables autonomous polling: mouse-fixes runs continuously and picks up new issu
 | [#43](https://github.com/ZhannaM85/mouse-fixes/issues/43) | feat: write run output to a per-run log file in logs/ | Do first — makes autonomous/remote runs observable |
 | ~~[#16](https://github.com/ZhannaM85/mouse-fixes/issues/16)~~ | ~~feat: `--watch` flag with polling loop~~ | ~~Core of watch mode~~ |
 | [#17](https://github.com/ZhannaM85/mouse-fixes/issues/17) | feat: persist processed issue IDs to avoid re-processing | Depends on #16 |
+| [#65](https://github.com/ZhannaM85/mouse-fixes/issues/65) | fix: `--watch` spawns unlimited concurrent Claude processes | Add concurrency cap (default 3); configurable via `.mouse-fixes.yml` |
 | [#18](https://github.com/ZhannaM85/mouse-fixes/issues/18) | feat: `--label` filter for `--watch` mode | Depends on #16 |
 
 ---
@@ -95,7 +101,16 @@ _Introduces specialized agent roles that hand off structured context between sta
 
 ---
 
-## Tier 8 — Distribution
+## Tier 8 — Testing infrastructure
+_Integration tests with real git fixtures and mocked gh CLI — catch orchestration bugs before they cause duplicate PRs or data loss._
+
+| # | Issue | Notes |
+|---|-------|-------|
+| [#69](https://github.com/ZhannaM85/mouse-fixes/issues/69) | feat: integration test suite with real git fixtures and mocked gh CLI | Do before Tier 9; tests should gate CI (#19) |
+
+---
+
+## Tier 9 — Distribution
 _Packaging and CI setup. Do last — the tool should be stable before publishing._
 
 | # | Issue | Notes |
