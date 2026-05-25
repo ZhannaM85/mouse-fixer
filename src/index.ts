@@ -596,7 +596,7 @@ async function runResume(
         done(claudeResult.toolCallLog || undefined);
     }
 
-    const { summary: output, timedOut, maxTurnsReached, usage } = claudeResult;
+    const { summary: output, timedOut, maxTurnsReached, processError, usage } = claudeResult;
 
     // Collect diff stats
     let sessionStats: SessionStats | null = null;
@@ -619,9 +619,12 @@ async function runResume(
 
     // Finalise state
     const filesChanged = getChangedFiles(cwd, session.branch);
-    const finalStage: RunStage = (timedOut || maxTurnsReached) ? 'failed' : 'done';
+    const finalStage: RunStage = (timedOut || maxTurnsReached || processError) ? 'failed' : 'done';
     const failureReason: FailureReason =
-        timedOut ? 'timedOut' : maxTurnsReached ? 'maxTurnsReached' : null;
+        timedOut ? 'timedOut'
+        : maxTurnsReached ? 'maxTurnsReached'
+        : processError ? 'error'
+        : null;
 
     if (finalStage === 'failed') {
         tryUpdateState(cwd, session.issueNumber, finalStage, {
@@ -658,7 +661,10 @@ async function runResume(
     if (maxTurnsReached) {
         console.warn(`\n  Warning: Claude reached the --max-turns limit (${maxTurns}). The fix may be incomplete.`);
     }
-    if (!timedOut && !maxTurnsReached) {
+    if (processError) {
+        console.warn(`\n  Warning: Claude process encountered an error: ${processError.message}`);
+    }
+    if (!timedOut && !maxTurnsReached && !processError) {
         markIssueDone(session.issueNumber, cwd, session.branch);
     }
 
@@ -793,7 +799,7 @@ async function fixIssue(
     prefix = '',
     configBaseBranch?: string,
     branchPrefix = 'fix/'
-): Promise<{ issueNumber: number; branch: string; prUrl: string | null; output: string; timedOut: boolean; maxTurnsReached: boolean; usage: UsageStats | null; sessionStats: SessionStats | null; timer: StepTimer }> {
+): Promise<{ issueNumber: number; branch: string; prUrl: string | null; output: string; timedOut: boolean; maxTurnsReached: boolean; processError?: Error; usage: UsageStats | null; sessionStats: SessionStats | null; timer: StepTimer }> {
     const timer = new StepTimer();
     const cwd = process.cwd();
 
@@ -832,7 +838,7 @@ async function fixIssue(
         done(claudeResult.toolCallLog || undefined);
     }
 
-    const { summary: output, timedOut, maxTurnsReached, usage } = claudeResult;
+    const { summary: output, timedOut, maxTurnsReached, processError, usage } = claudeResult;
 
     // 3. Collect git diff stats
     let sessionStats: SessionStats | null = null;
@@ -857,9 +863,12 @@ async function fixIssue(
     // Populate filesChanged from git and finalize state (done or failed).
     // Failed/timed-out runs leave the state file intact for inspection.
     const filesChanged = getChangedFiles(cwd, branch);
-    const finalStage: RunStage = (timedOut || maxTurnsReached) ? 'failed' : 'done';
+    const finalStage: RunStage = (timedOut || maxTurnsReached || processError) ? 'failed' : 'done';
     const failureReason: FailureReason =
-        timedOut ? 'timedOut' : maxTurnsReached ? 'maxTurnsReached' : null;
+        timedOut ? 'timedOut'
+        : maxTurnsReached ? 'maxTurnsReached'
+        : processError ? 'error'
+        : null;
 
     if (finalStage === 'failed') {
         // Persist failure metadata and the captured output log for inspection / post-mortem
@@ -891,7 +900,7 @@ async function fixIssue(
         });
     }
 
-    return { issueNumber, branch, prUrl, output, timedOut, maxTurnsReached, usage, sessionStats, timer };
+    return { issueNumber, branch, prUrl, output, timedOut, maxTurnsReached, processError, usage, sessionStats, timer };
 }
 
 async function runWatch(intervalSeconds: number, timeoutMs: number, config: MouseFixesConfig = {}): Promise<void> {
@@ -1022,7 +1031,10 @@ async function main(): Promise<void> {
         if (result.maxTurnsReached) {
             console.warn(`\n  Warning: Claude reached the --max-turns limit (${maxTurns}). The fix may be incomplete.`);
         }
-        if (!result.timedOut && !result.maxTurnsReached) {
+        if (result.processError) {
+            console.warn(`\n  Warning: Claude process encountered an error: ${result.processError.message}`);
+        }
+        if (!result.timedOut && !result.maxTurnsReached && !result.processError) {
             markIssueDone(result.issueNumber, process.cwd(), result.branch);
         }
 

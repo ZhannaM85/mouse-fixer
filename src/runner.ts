@@ -14,6 +14,8 @@ interface RunResult {
     toolCallLog: string;
     timedOut: boolean;
     maxTurnsReached: boolean;
+    /** Set when the Claude process itself failed to spawn or emitted an unexpected error. */
+    processError?: Error;
     usage: UsageStats | null;
 }
 
@@ -224,7 +226,15 @@ export async function spawnClaude(
                 // Include lines captured so far so the output log is useful for post-mortem
                 resolve({ summary: '[TIMED OUT] Claude did not finish within the allowed time.', toolCallLog: allLines.join('\n'), timedOut: true, maxTurnsReached: false, usage: null });
             } else {
-                reject(err);
+                // Resolve (not reject) so callers can record failureReason: 'error' and run post-mortem
+                resolve({
+                    summary: `[PROCESS ERROR] ${err.message}`,
+                    toolCallLog: allLines.join('\n'),
+                    timedOut: false,
+                    maxTurnsReached: false,
+                    processError: err,
+                    usage: null,
+                });
             }
         });
 
