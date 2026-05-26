@@ -110,6 +110,15 @@ _Integration tests with real git fixtures and mocked gh CLI — catch orchestrat
 
 ---
 
+## Interview Trainer (Karkas) — `interview-trainer-angular-app`
+_Feature backlog for the Karkas app. Issues link to that repo._
+
+| # | Issue | Notes |
+|---|-------|-------|
+| [#102](https://github.com/ZhannaM85/interview-trainer-angular-app/issues/102) | feat: add sort-by-date on the Planning page | Sort subtopics by last-studied date (oldest first / newest first) so users can surface stale topics |
+
+---
+
 ## Tier 9 — Distribution
 _Packaging and CI setup. Do last — the tool should be stable before publishing._
 
