@@ -40,7 +40,7 @@ _Build user confidence before going fully autonomous: config, dry-run, pre-fligh
 | ~~[#49](https://github.com/ZhannaM85/mouse-fixes/issues/49)~~ | ~~feat: repository configuration file (`.mouse-fixes.yml`)~~ | ~~Do first — other features in this tier read from it~~ |
 | ~~[#50](https://github.com/ZhannaM85/mouse-fixes/issues/50)~~ | ~~feat: persist structured run state for robust resume and analytics~~ | ~~Required by #47 (resume)~~ |
 | ~~[#60](https://github.com/ZhannaM85/mouse-fixes/issues/60)~~ | ~~feat: enrich failed-run state file with output log, diagnosis, and issue improvement suggestions~~ | ~~Depends on #50 ✅; complements #43~~ |
-| [#63](https://github.com/ZhannaM85/mouse-fixes/issues/63) | fix: `mouse-fixes next` re-picks already-addressed issues | Pull main + check GitHub before resolving next issue |
+| ~~[#63](https://github.com/ZhannaM85/mouse-fixes/issues/63)~~ | ~~fix: `mouse-fixes next` re-picks already-addressed issues~~ | ~~Pull main + check GitHub before resolving next issue~~ |
 | [#64](https://github.com/ZhannaM85/mouse-fixes/issues/64) | fix: resume treats stale state files as resumable even when PR is merged | Check GitHub for merged PR before surfacing a session |
 | [#66](https://github.com/ZhannaM85/mouse-fixes/issues/66) | fix: getChangedFiles/getGitDiffStats hardcode base branch names | Pass detectDefaultBranch() through; affects diff stats on non-main repos |
 | [#67](https://github.com/ZhannaM85/mouse-fixes/issues/67) | fix: PR URL silently lost when Claude adds trailing text after the URL | Scan all lines with regex instead of last-line heuristic |
