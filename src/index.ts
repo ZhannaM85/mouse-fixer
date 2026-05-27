@@ -22,17 +22,54 @@ function parseIssueNumber(raw: string): number {
     return n;
 }
 
-function resolveNextIssue(cwd: string): number {
+function resolveNextIssue(cwd: string, branchPrefix = 'fix/'): number {
+    // Always read from a fresh main so we don't re-pick issues fixed in unmerged PRs
+    const defaultBranch = detectDefaultBranch();
+    try {
+        execSync(`git checkout ${defaultBranch}`, { cwd, stdio: 'pipe' });
+        execSync(`git pull origin ${defaultBranch}`, { cwd, stdio: 'pipe' });
+    } catch {
+        console.warn('  Warning: could not pull latest from origin — reading local copy of docs/issues-priority.md');
+    }
+
     const filePath = join(cwd, 'docs', 'issues-priority.md');
     if (!existsSync(filePath)) {
         console.error('Error: docs/issues-priority.md not found.');
         process.exit(1);
     }
+
+    // Collect issue numbers that already have an open PR so we can skip them
+    let issuesWithOpenPR = new Set<number>();
+    try {
+        const openPRs = JSON.parse(
+            execSync('gh pr list --state open --json number,headRefName', { cwd, encoding: 'utf8' }).trim()
+        ) as Array<{ number: number; headRefName: string }>;
+        issuesWithOpenPR = new Set(
+            openPRs.flatMap(pr => {
+                const m = pr.headRefName.match(new RegExp(`^${escapeRegex(branchPrefix)}(\\d+)-`));
+                return m ? [parseInt(m[1], 10)] : [];
+            })
+        );
+    } catch { /* gh not available or API error — skip open-PR check */ }
+
     const lines = readFileSync(filePath, 'utf8').split('\n');
     for (const line of lines) {
         if (line.includes('~~')) continue;
         const m = line.match(/\[#(\d+)\]/);
-        if (m) return parseInt(m[1], 10);
+        if (!m) continue;
+        const candidate = parseInt(m[1], 10);
+
+        if (issuesWithOpenPR.has(candidate)) continue;
+
+        // Skip issues that are already closed on GitHub
+        try {
+            const issueState = JSON.parse(
+                execSync(`gh issue view ${candidate} --json state`, { cwd, encoding: 'utf8' }).trim()
+            ) as { state: string };
+            if (issueState.state === 'CLOSED') continue;
+        } catch { /* gh not available or issue not found — don't skip */ }
+
+        return candidate;
     }
     console.error('Error: No open issues found in docs/issues-priority.md');
     process.exit(1);
@@ -175,7 +212,7 @@ Run from inside the target git repository.
 
     let issueNumbers: number[];
     if (positional[0] === 'next') {
-        issueNumbers = [resolveNextIssue(process.cwd())];
+        issueNumbers = [resolveNextIssue(process.cwd(), config.branchPrefix)];
     } else {
         if (positional.length === 0) {
             console.error('Error: at least one issue number or GitHub issue URL is required.');
