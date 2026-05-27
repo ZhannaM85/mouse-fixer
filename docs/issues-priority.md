@@ -9,7 +9,7 @@ _These are standalone, low-risk, and unblock everything else._
 
 | # | Issue | Notes |
 |---|-------|-------|
-| [#68](https://github.com/ZhannaM85/mouse-fixes/issues/68) | fix: remove dead RunStage values (committing, pushing, opening-pr) | Tiny cleanup; misleads anyone reading the type |
+| ~~[#68](https://github.com/ZhannaM85/mouse-fixes/issues/68)~~ | ~~fix: remove dead RunStage values (committing, pushing, opening-pr)~~ | ~~Tiny cleanup; misleads anyone reading the type~~ |
 | ~~[#22](https://github.com/ZhannaM85/mouse-fixes/issues/22)~~ | ~~fix: rename package from `mouse-fixer` to `mouse-fixes`~~ | ~~Do first — affects npm publish and install instructions~~ |
 | ~~[#30](https://github.com/ZhannaM85/mouse-fixes/issues/30)~~ | ~~fix: checkout main after PR is created~~ | ~~Affects every run; causes commits to land on wrong branch~~ |
 | ~~[#27](https://github.com/ZhannaM85/mouse-fixes/issues/27)~~ | ~~docs: add hero image, repository topics, and expand README~~ | ~~No code deps; improves first impression before npm publish~~ |
