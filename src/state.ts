@@ -5,9 +5,6 @@ export type RunStage =
     | 'pending'
     | 'fetching-issue'
     | 'claude-running'
-    | 'committing'
-    | 'pushing'
-    | 'opening-pr'
     | 'done'
     | 'failed';
 
