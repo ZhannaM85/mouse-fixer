@@ -438,6 +438,36 @@ function findResumableSessions(cwd: string, repo: string, branchPrefix = 'fix/')
                 if (state.stage === 'done') continue;
                 if (!state.branch) continue;
 
+                // Skip sessions whose PR has since been merged or whose issue is now closed.
+                // Update the state file to 'done' so it won't surface again.
+                let prMerged = false;
+                try {
+                    const prJson = execSync(
+                        `gh pr list --repo ${state.repo} --head ${state.branch} --state merged --json number`,
+                        { cwd, encoding: 'utf8' }
+                    ).trim();
+                    const prs = JSON.parse(prJson) as unknown[];
+                    prMerged = prs.length > 0;
+                } catch { /* gh unavailable or API error — assume not merged */ }
+
+                let issueClosed = false;
+                try {
+                    const issueJson = execSync(
+                        `gh issue view ${state.issue} --repo ${state.repo} --json state`,
+                        { cwd, encoding: 'utf8' }
+                    ).trim();
+                    const issueData = JSON.parse(issueJson) as { state: string };
+                    issueClosed = issueData.state === 'CLOSED';
+                } catch { /* gh unavailable or API error — assume not closed */ }
+
+                if (prMerged || issueClosed) {
+                    try {
+                        const updatedState: RunState = { ...state, stage: 'done', updatedAt: new Date().toISOString() };
+                        writeFileSync(join(stateDirectory, file), JSON.stringify(updatedState, null, 2) + '\n', 'utf8');
+                    } catch { /* ignore write errors */ }
+                    continue;
+                }
+
                 let hasBranchLocally = false;
                 try {
                     execSync(`git rev-parse --verify refs/heads/${state.branch}`, { cwd, stdio: 'pipe' });
