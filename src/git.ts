@@ -4,10 +4,13 @@ function exec(cmd: string): string {
     return execSync(cmd, { encoding: 'utf8', cwd: process.cwd() }).trim();
 }
 
-export function getChangedFiles(cwd: string, targetRef: string = 'HEAD'): string[] {
+export function getChangedFiles(cwd: string, targetRef: string = 'HEAD', defaultBranch?: string): string[] {
     try {
         let base: string | null = null;
-        for (const branch of ['master', 'main', 'origin/master', 'origin/main']) {
+        const candidates = defaultBranch
+            ? [defaultBranch, `origin/${defaultBranch}`, 'main', 'master', 'origin/main', 'origin/master']
+            : ['main', 'master', 'origin/main', 'origin/master'];
+        for (const branch of candidates) {
             try {
                 base = execSync(`git merge-base ${targetRef} ${branch}`, { encoding: 'utf8', cwd }).trim();
                 break;
@@ -21,10 +24,13 @@ export function getChangedFiles(cwd: string, targetRef: string = 'HEAD'): string
     }
 }
 
-export function getGitDiffStats(cwd: string, targetRef: string = 'HEAD'): { linesAdded: number; linesDeleted: number } {
+export function getGitDiffStats(cwd: string, targetRef: string = 'HEAD', defaultBranch?: string): { linesAdded: number; linesDeleted: number } {
     try {
         let base: string | null = null;
-        for (const branch of ['master', 'main', 'origin/master', 'origin/main']) {
+        const candidates = defaultBranch
+            ? [defaultBranch, `origin/${defaultBranch}`, 'main', 'master', 'origin/main', 'origin/master']
+            : ['main', 'master', 'origin/main', 'origin/master'];
+        for (const branch of candidates) {
             try {
                 base = execSync(`git merge-base ${targetRef} ${branch}`, { encoding: 'utf8', cwd }).trim();
                 break;

@@ -42,7 +42,7 @@ _Build user confidence before going fully autonomous: config, dry-run, pre-fligh
 | ~~[#60](https://github.com/ZhannaM85/mouse-fixes/issues/60)~~ | ~~feat: enrich failed-run state file with output log, diagnosis, and issue improvement suggestions~~ | ~~Depends on #50 ✅; complements #43~~ |
 | ~~[#63](https://github.com/ZhannaM85/mouse-fixes/issues/63)~~ | ~~fix: `mouse-fixes next` re-picks already-addressed issues~~ | ~~Pull main + check GitHub before resolving next issue~~ |
 | ~~[#64](https://github.com/ZhannaM85/mouse-fixes/issues/64)~~ | ~~fix: resume treats stale state files as resumable even when PR is merged~~ | ~~Check GitHub for merged PR before surfacing a session~~ |
-| [#66](https://github.com/ZhannaM85/mouse-fixes/issues/66) | fix: getChangedFiles/getGitDiffStats hardcode base branch names | Pass detectDefaultBranch() through; affects diff stats on non-main repos |
+| ~~[#66](https://github.com/ZhannaM85/mouse-fixes/issues/66)~~ | ~~fix: getChangedFiles/getGitDiffStats hardcode base branch names~~ | ~~Pass detectDefaultBranch() through; affects diff stats on non-main repos~~ |
 | [#67](https://github.com/ZhannaM85/mouse-fixes/issues/67) | fix: PR URL silently lost when Claude adds trailing text after the URL | Scan all lines with regex instead of last-line heuristic |
 | [#45](https://github.com/ZhannaM85/mouse-fixes/issues/45) | feat: pre-flight git safety checks before running Claude | Prevents mid-run failures from bad repo state; covers branch-already-exists (#45 AC) |
 | [#44](https://github.com/ZhannaM85/mouse-fixes/issues/44) | feat: `--dry-run` mode to preview changes without pushing or opening a PR | Biggest adoption driver; depends on nothing |
