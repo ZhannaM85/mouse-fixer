@@ -668,7 +668,7 @@ async function runResume(
     // Collect diff stats
     let sessionStats: SessionStats | null = null;
     if (usage) {
-        const { linesAdded, linesDeleted } = getGitDiffStats(cwd, session.branch);
+        const { linesAdded, linesDeleted } = getGitDiffStats(cwd, session.branch, defaultBranch);
         const issueChars = issue.title.length + (issue.body?.length ?? 0);
         const overheadChars = Math.max(0, prompt.length - issueChars);
         sessionStats = {
@@ -685,7 +685,7 @@ async function runResume(
     const prUrl = lastLine.startsWith('https://') ? lastLine : null;
 
     // Finalise state
-    const filesChanged = getChangedFiles(cwd, session.branch);
+    const filesChanged = getChangedFiles(cwd, session.branch, defaultBranch);
     const finalStage: RunStage = (timedOut || maxTurnsReached || processError) ? 'failed' : 'done';
     const failureReason: FailureReason =
         timedOut ? 'timedOut'
@@ -910,7 +910,7 @@ async function fixIssue(
     // 3. Collect git diff stats
     let sessionStats: SessionStats | null = null;
     if (usage) {
-        const { linesAdded, linesDeleted } = getGitDiffStats(cwd, branch);
+        const { linesAdded, linesDeleted } = getGitDiffStats(cwd, branch, defaultBranch);
         // Overhead = template boilerplate minus the issue-specific content
         const issueChars = issue.title.length + (issue.body?.length ?? 0);
         const overheadChars = Math.max(0, prompt.length - issueChars);
@@ -929,7 +929,7 @@ async function fixIssue(
 
     // Populate filesChanged from git and finalize state (done or failed).
     // Failed/timed-out runs leave the state file intact for inspection.
-    const filesChanged = getChangedFiles(cwd, branch);
+    const filesChanged = getChangedFiles(cwd, branch, defaultBranch);
     const finalStage: RunStage = (timedOut || maxTurnsReached || processError) ? 'failed' : 'done';
     const failureReason: FailureReason =
         timedOut ? 'timedOut'
