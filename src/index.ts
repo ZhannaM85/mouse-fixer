@@ -679,10 +679,10 @@ async function runResume(
         };
     }
 
-    // Extract PR URL from last line of output
+    // Extract PR URL from output — scan all lines so trailing text after the URL doesn't cause it to be lost
     const trimmedOutput = output.trim();
-    const lastLine = trimmedOutput.split('\n').at(-1)?.trim() ?? '';
-    const prUrl = lastLine.startsWith('https://') ? lastLine : null;
+    const prUrlMatch = [...trimmedOutput.matchAll(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/g)].at(-1);
+    const prUrl = prUrlMatch ? prUrlMatch[0] : null;
 
     // Finalise state
     const filesChanged = getChangedFiles(cwd, session.branch, defaultBranch);
@@ -922,10 +922,10 @@ async function fixIssue(
         };
     }
 
-    // Extract PR URL from last line of output
+    // Extract PR URL from output — scan all lines so trailing text after the URL doesn't cause it to be lost
     const trimmed = output.trim();
-    const lastLine = trimmed.split('\n').at(-1)?.trim() ?? '';
-    const prUrl = lastLine.startsWith('https://') ? lastLine : null;
+    const prUrlMatch = [...trimmed.matchAll(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/g)].at(-1);
+    const prUrl = prUrlMatch ? prUrlMatch[0] : null;
 
     // Populate filesChanged from git and finalize state (done or failed).
     // Failed/timed-out runs leave the state file intact for inspection.
