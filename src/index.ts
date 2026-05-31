@@ -4,7 +4,7 @@ import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue, fetchAllIssues, Issue } from './github.js';
-import { detectRepo, slugify, getGitDiffStats, getChangedFiles, detectDefaultBranch } from './git.js';
+import { detectRepo, slugify, getGitDiffStats, getChangedFiles, detectDefaultBranch, runPreflightChecks } from './git.js';
 import { createState, updateState, readState, RunStage, RunState, FailureReason } from './state.js';
 import { spawnClaude, UsageStats, runPostMortem } from './runner.js';
 import { loadConfig, MouseFixesConfig, CONFIG_FILENAME } from './config.js';
@@ -78,10 +78,10 @@ function resolveNextIssue(cwd: string, branchPrefix = 'fix/'): number {
 const DEFAULT_INTERVAL_S = 30;
 
 type Command =
-    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number }
+    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean }
     | { kind: 'start'; timeoutMs: number }
-    | { kind: 'watch'; intervalSeconds: number; timeoutMs: number }
-    | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number };
+    | { kind: 'watch'; intervalSeconds: number; timeoutMs: number; skipChecks: boolean }
+    | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean };
 
 function parseArgs(config: MouseFixesConfig = {}): Command {
     const args = process.argv.slice(2);
@@ -105,6 +105,7 @@ Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id
   --model <model-id>   Claude model to use (e.g. claude-haiku-4-5-20251001, claude-sonnet-4-6)
                        If omitted, the claude CLI uses its own default
   --max-turns <n>      Max conversation turns Claude may take (default: ${DEFAULT_MAX_TURNS})
+  --skip-checks        Bypass all pre-flight git safety checks (for CI or advanced users)
 
 Config file (${CONFIG_FILENAME}):
   Place a ${CONFIG_FILENAME} file in the repo root to set per-repo defaults.
@@ -136,6 +137,8 @@ Run from inside the target git repository.
         `.trim());
         process.exit(0);
     }
+
+    const skipChecks = args.includes('--skip-checks');
 
     let timeoutS = DEFAULT_TIMEOUT_S;
     const tIdx = args.indexOf('--timeout');
@@ -185,7 +188,7 @@ Run from inside the target git repository.
             }
             intervalSeconds = val;
         }
-        return { kind: 'watch', intervalSeconds, timeoutMs: timeoutS * 1000 };
+        return { kind: 'watch', intervalSeconds, timeoutMs: timeoutS * 1000, skipChecks };
     }
 
     // Identify indices consumed by flags so we can exclude them from positional args
@@ -203,7 +206,7 @@ Run from inside the target git repository.
     if (positional[0] === 'resume') {
         const issueArg = positional[1];
         const issueNumber = issueArg !== undefined ? parseIssueNumber(issueArg) : null;
-        return { kind: 'resume', issueNumber, timeoutMs: timeoutS * 1000, model, maxTurns };
+        return { kind: 'resume', issueNumber, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks };
     }
 
     if (positional[0] === 'start') {
@@ -221,7 +224,7 @@ Run from inside the target git repository.
         issueNumbers = positional.map(arg => parseIssueNumber(arg));
     }
 
-    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns };
+    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks };
 }
 
 function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, defaultBranch: string, branch: string): string {
@@ -865,7 +868,8 @@ async function fixIssue(
     maxTurns: number,
     prefix = '',
     configBaseBranch?: string,
-    branchPrefix = 'fix/'
+    branchPrefix = 'fix/',
+    skipChecks = false
 ): Promise<{ issueNumber: number; branch: string; prUrl: string | null; output: string; timedOut: boolean; maxTurnsReached: boolean; processError?: Error; usage: UsageStats | null; sessionStats: SessionStats | null; timer: StepTimer }> {
     const timer = new StepTimer();
     const cwd = process.cwd();
@@ -894,6 +898,21 @@ async function fixIssue(
     // Config-supplied base branch takes precedence over auto-detection
     const defaultBranch = configBaseBranch ?? detectDefaultBranch();
     const branch = `${branchPrefix}${issue.number}-${slugify(issue.title)}`;
+
+    // Pre-flight safety checks — abort early with actionable messages if the repo
+    // is in a state that would cause Claude to fail or produce unexpected git changes.
+    if (!skipChecks) {
+        const preflightErrors = runPreflightChecks(cwd, branch);
+        if (preflightErrors.length > 0) {
+            console.error('\n  Pre-flight checks failed:');
+            for (const err of preflightErrors) {
+                console.error(`\n  ✗ ${err.message}`);
+            }
+            console.error('\n  Fix the issues above and re-run, or pass --skip-checks to bypass.\n');
+            process.exit(1);
+        }
+    }
+
     const prompt = buildPrompt(repo, issue, defaultBranch, branch);
     let claudeResult: Awaited<ReturnType<typeof spawnClaude>>;
     {
@@ -970,7 +989,7 @@ async function fixIssue(
     return { issueNumber, branch, prUrl, output, timedOut, maxTurnsReached, processError, usage, sessionStats, timer };
 }
 
-async function runWatch(intervalSeconds: number, timeoutMs: number, config: MouseFixesConfig = {}): Promise<void> {
+async function runWatch(intervalSeconds: number, timeoutMs: number, config: MouseFixesConfig = {}, skipChecks = false): Promise<void> {
     // Detect repo once up front
     let repo: string;
     try {
@@ -1023,7 +1042,8 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
                         config.maxTurns ?? DEFAULT_MAX_TURNS,
                         prefix,
                         config.defaultBaseBranch,
-                        config.branchPrefix
+                        config.branchPrefix,
+                        skipChecks,
                     );
                 })
             );
@@ -1052,11 +1072,11 @@ async function main(): Promise<void> {
     }
 
     if (command.kind === 'watch') {
-        await runWatch(command.intervalSeconds, command.timeoutMs, config);
+        await runWatch(command.intervalSeconds, command.timeoutMs, config, command.skipChecks);
         return;
     }
 
-    const { issueNumbers, timeoutMs, model, maxTurns } = command;
+    const { issueNumbers, timeoutMs, model, maxTurns, skipChecks } = command;
     const timer = new StepTimer();
 
     const modelLabel = model ? `  model: ${model}` : '';
@@ -1085,7 +1105,8 @@ async function main(): Promise<void> {
             return fixIssue(
                 n, repo, timeoutMs, model, maxTurns, prefix,
                 config.defaultBaseBranch,
-                config.branchPrefix
+                config.branchPrefix,
+                skipChecks,
             );
         })
     );
