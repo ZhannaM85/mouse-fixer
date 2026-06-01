@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, unlinkSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
+import { tmpdir } from 'node:os';
 import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue, fetchAllIssues, Issue } from './github.js';
 import { detectRepo, slugify, getGitDiffStats, getChangedFiles, detectDefaultBranch, runPreflightChecks } from './git.js';
@@ -77,8 +79,10 @@ function resolveNextIssue(cwd: string, branchPrefix = 'fix/'): number {
 
 const DEFAULT_INTERVAL_S = 30;
 
+type ApproveCheckpoint = 'before-push' | 'before-pr';
+
 type Command =
-    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean }
+    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean; approve?: ApproveCheckpoint }
     | { kind: 'start'; timeoutMs: number }
     | { kind: 'watch'; intervalSeconds: number; timeoutMs: number; skipChecks: boolean }
     | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean };
@@ -105,6 +109,7 @@ Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id
   --model <model-id>   Claude model to use (e.g. claude-haiku-4-5-20251001, claude-sonnet-4-6)
                        If omitted, the claude CLI uses its own default
   --max-turns <n>      Max conversation turns Claude may take (default: ${DEFAULT_MAX_TURNS})
+  --approve <stage>    Pause for human approval at "before-push" or "before-pr"
   --dry-run            Apply edits locally but skip commit, push, and PR creation
   --skip-checks        Bypass all pre-flight git safety checks (for CI or advanced users)
 
@@ -121,6 +126,8 @@ Config file (${CONFIG_FILENAME}):
 
 Examples:
   mouse-fixes 38
+  mouse-fixes 42 --approve=before-push
+  mouse-fixes 42 --approve=before-pr
   mouse-fixes 42 --dry-run
   mouse-fixes 42 43 44
   mouse-fixes https://github.com/owner/repo/issues/38
@@ -142,6 +149,27 @@ Run from inside the target git repository.
 
     const skipChecks = args.includes('--skip-checks');
     const dryRun = args.includes('--dry-run');
+
+    let approve: ApproveCheckpoint | undefined;
+    const approveEqIdx = args.findIndex(a => a.startsWith('--approve='));
+    const approveSpaceIdx = args.indexOf('--approve');
+    let approveValueIdx = -1;
+    if (approveEqIdx !== -1) {
+        const val = args[approveEqIdx].split('=')[1];
+        if (val !== 'before-push' && val !== 'before-pr') {
+            console.error('Error: --approve must be "before-push" or "before-pr".');
+            process.exit(1);
+        }
+        approve = val as ApproveCheckpoint;
+    } else if (approveSpaceIdx !== -1) {
+        approveValueIdx = approveSpaceIdx + 1;
+        const val = args[approveValueIdx];
+        if (val !== 'before-push' && val !== 'before-pr') {
+            console.error('Error: --approve must be "before-push" or "before-pr".');
+            process.exit(1);
+        }
+        approve = val as ApproveCheckpoint;
+    }
 
     let timeoutS = DEFAULT_TIMEOUT_S;
     const tIdx = args.indexOf('--timeout');
@@ -202,6 +230,9 @@ Run from inside the target git repository.
             flagIndices.add(idx + 1);
         }
     });
+    const approveIdx = approveEqIdx !== -1 ? approveEqIdx : approveSpaceIdx;
+    if (approveIdx !== -1) flagIndices.add(approveIdx);
+    if (approveValueIdx !== -1) flagIndices.add(approveValueIdx);
 
     // Positional args: everything that isn't a flag or a flag value
     const positional = args.filter((arg, i) => !flagIndices.has(i) && !arg.startsWith('--'));
@@ -227,7 +258,7 @@ Run from inside the target git repository.
         issueNumbers = positional.map(arg => parseIssueNumber(arg));
     }
 
-    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks, dryRun };
+    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks, dryRun, approve };
 }
 
 function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, defaultBranch: string, branch: string): string {
@@ -887,6 +918,215 @@ function markIssueDone(issueNumber: number, cwd: string, branch: string): void {
     } catch { /* non-fatal — best-effort */ }
 }
 
+const APPROVE_BODY_START = 'APPROVE-PR-BODY-START';
+const APPROVE_BODY_END = 'APPROVE-PR-BODY-END';
+
+function buildApproveBeforePushPrompt(
+    repo: string,
+    issue: { number: number; title: string; body: string; labels: string[] },
+    defaultBranch: string,
+    branch: string
+): string {
+    const labelList = issue.labels.length ? issue.labels.join(', ') : 'none';
+    return `You are an automated agent fixing GitHub issue #${issue.number} in repository ${repo}.
+
+APPROVAL MODE (before-push): Apply code edits and commit locally, then STOP. A human will review before pushing.
+
+Title: ${issue.title}
+Labels: ${labelList}
+
+Description:
+${issue.body || '(no description provided)'}
+
+Instructions:
+1. FIRST — reset to ${defaultBranch} and create the feature branch before touching any files:
+   git checkout ${defaultBranch} && git pull origin ${defaultBranch} && git checkout -b ${branch}
+
+2. Read the relevant source files, understand the problem, and implement a minimal fix.
+   Follow the existing code style and patterns in this repository.
+
+3. Stage and commit your changes:
+   a. git add <file1> <file2> ...
+   b. git commit -m "Fix #${issue.number}: ${issue.title}"
+
+4. DO NOT run git push or gh pr create.
+
+5. Output the PR body you would have submitted, using exactly this format (including the markers on their own lines):
+
+${APPROVE_BODY_START}
+## Summary
+
+- <bullet describing the first change and why>
+- <additional bullets as needed>
+
+## Files changed
+
+| File | Change |
+|------|--------|
+| \`filename.ts\` | what changed in this file |
+
+## Acceptance criteria
+
+- [ ] <first criterion from the issue, checked off conceptually>
+- [ ] <additional criteria as needed>
+
+Closes #${issue.number}
+
+🐭 Generated with [mouse-fixes](https://github.com/ZhannaM85/mouse-fixes)
+${APPROVE_BODY_END}`;
+}
+
+function buildApproveBeforePrPrompt(
+    repo: string,
+    issue: { number: number; title: string; body: string; labels: string[] },
+    defaultBranch: string,
+    branch: string
+): string {
+    const labelList = issue.labels.length ? issue.labels.join(', ') : 'none';
+    return `You are an automated agent fixing GitHub issue #${issue.number} in repository ${repo}.
+
+APPROVAL MODE (before-pr): Apply code edits, commit, and push, then STOP. A human will review before a PR is opened.
+
+Title: ${issue.title}
+Labels: ${labelList}
+
+Description:
+${issue.body || '(no description provided)'}
+
+Instructions:
+1. FIRST — reset to ${defaultBranch} and create the feature branch before touching any files:
+   git checkout ${defaultBranch} && git pull origin ${defaultBranch} && git checkout -b ${branch}
+
+2. Read the relevant source files, understand the problem, and implement a minimal fix.
+   Follow the existing code style and patterns in this repository.
+
+3. Stage and commit your changes:
+   a. git add <file1> <file2> ...
+   b. git commit -m "Fix #${issue.number}: ${issue.title}"
+
+4. Push the branch:
+   git push -u origin ${branch}
+
+5. DO NOT run gh pr create.
+
+6. Output the PR body you would have submitted, using exactly this format (including the markers on their own lines):
+
+${APPROVE_BODY_START}
+## Summary
+
+- <bullet describing the first change and why>
+- <additional bullets as needed>
+
+## Files changed
+
+| File | Change |
+|------|--------|
+| \`filename.ts\` | what changed in this file |
+
+## Acceptance criteria
+
+- [ ] <first criterion from the issue, checked off conceptually>
+- [ ] <additional criteria as needed>
+
+Closes #${issue.number}
+
+🐭 Generated with [mouse-fixes](https://github.com/ZhannaM85/mouse-fixes)
+${APPROVE_BODY_END}`;
+}
+
+function extractPrBody(output: string, issueNumber: number, issueTitle: string): string {
+    const start = output.indexOf(APPROVE_BODY_START);
+    const end = output.indexOf(APPROVE_BODY_END);
+    if (start !== -1 && end !== -1 && end > start) {
+        return output.slice(start + APPROVE_BODY_START.length, end).trim();
+    }
+    return `## Summary\n\n- Fix #${issueNumber}: ${issueTitle}\n\nCloses #${issueNumber}\n\n🐭 Generated with [mouse-fixes](https://github.com/ZhannaM85/mouse-fixes)`;
+}
+
+async function promptApproval(branch: string, cwd: string, defaultBranch: string): Promise<boolean> {
+    let diffStat = '';
+    try {
+        diffStat = execSync(`git diff --stat ${defaultBranch}..${branch}`, { cwd, encoding: 'utf8' }).trim();
+    } catch {
+        diffStat = '(could not get diff stat)';
+    }
+
+    let commitMsg = '';
+    try {
+        commitMsg = execSync(`git log -1 --pretty=%B ${branch}`, { cwd, encoding: 'utf8' }).trim();
+    } catch {
+        commitMsg = '(could not get commit message)';
+    }
+
+    console.log('\n--- Approval Checkpoint ---');
+    console.log('\nFiles changed:');
+    console.log(diffStat || '  (no changes detected)');
+    console.log('\nCommit message:');
+    console.log('  ' + commitMsg.replace(/\n/g, '\n  '));
+    console.log('');
+
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+    return new Promise(resolve => {
+        const ask = (): void => {
+            rl.question('Continue? [y]es / [n]o / [d]iff: ', answer => {
+                const a = answer.trim().toLowerCase();
+                if (a === 'y' || a === 'yes') {
+                    rl.close();
+                    resolve(true);
+                } else if (a === 'n' || a === 'no') {
+                    rl.close();
+                    resolve(false);
+                } else if (a === 'd' || a === 'diff') {
+                    let fullDiff = '';
+                    try {
+                        fullDiff = execSync(`git diff ${defaultBranch}..${branch}`, { cwd, encoding: 'utf8' });
+                    } catch {
+                        fullDiff = '(could not get diff)';
+                    }
+                    console.log('\n' + fullDiff);
+                    ask();
+                } else {
+                    console.log('  Please enter y, n, or d.');
+                    ask();
+                }
+            });
+        };
+        ask();
+    });
+}
+
+function performPushAndPr(branch: string, prBody: string, issueNumber: number, issueTitle: string, cwd: string): string | null {
+    try {
+        execSync(`git push -u origin ${branch}`, { cwd, stdio: 'pipe' });
+        console.log(`  Pushed branch ${branch}`);
+    } catch (e) {
+        console.error(`  Error pushing branch: ${(e as Error).message}`);
+        return null;
+    }
+    return performPrOnly(branch, prBody, issueNumber, issueTitle, cwd);
+}
+
+function performPrOnly(branch: string, prBody: string, issueNumber: number, issueTitle: string, cwd: string): string | null {
+    const tempPath = join(tmpdir(), `mouse-fixes-pr-${issueNumber}.md`);
+    try {
+        writeFileSync(tempPath, prBody, 'utf8');
+        const out = execSync(
+            `gh pr create --title "Fix #${issueNumber}: ${issueTitle}" --body-file "${tempPath}"`,
+            { cwd, encoding: 'utf8' }
+        ).trim();
+        const urlMatch = out.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/);
+        const prUrl = urlMatch ? urlMatch[0] : null;
+        if (prUrl) console.log(`  PR created: ${prUrl}`);
+        return prUrl;
+    } catch (e) {
+        console.error(`  Error creating PR: ${(e as Error).message}`);
+        return null;
+    } finally {
+        try { unlinkSync(tempPath); } catch { /* ignore */ }
+    }
+}
+
 /** Update state silently — state is auxiliary and must not crash the main run. */
 function tryUpdateState(
     cwd: string,
@@ -907,8 +1147,9 @@ async function fixIssue(
     configBaseBranch?: string,
     branchPrefix = 'fix/',
     skipChecks = false,
-    dryRun = false
-): Promise<{ issueNumber: number; branch: string; prUrl: string | null; output: string; timedOut: boolean; maxTurnsReached: boolean; processError?: Error; usage: UsageStats | null; sessionStats: SessionStats | null; timer: StepTimer }> {
+    dryRun = false,
+    approve?: ApproveCheckpoint
+): Promise<{ issueNumber: number; branch: string; prUrl: string | null; output: string; timedOut: boolean; maxTurnsReached: boolean; processError?: Error; usage: UsageStats | null; sessionStats: SessionStats | null; timer: StepTimer; approvalDeclined: boolean }> {
     const timer = new StepTimer();
     const cwd = process.cwd();
 
@@ -953,6 +1194,10 @@ async function fixIssue(
 
     const prompt = dryRun
         ? buildDryRunPrompt(repo, issue, defaultBranch, branch)
+        : approve === 'before-push'
+        ? buildApproveBeforePushPrompt(repo, issue, defaultBranch, branch)
+        : approve === 'before-pr'
+        ? buildApproveBeforePrPrompt(repo, issue, defaultBranch, branch)
         : buildPrompt(repo, issue, defaultBranch, branch);
     let claudeResult: Awaited<ReturnType<typeof spawnClaude>>;
     {
@@ -987,7 +1232,34 @@ async function fixIssue(
     // Extract PR URL from output — scan all lines so trailing text after the URL doesn't cause it to be lost
     const trimmed = output.trim();
     const prUrlMatch = [...trimmed.matchAll(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/g)].at(-1);
-    const prUrl = prUrlMatch ? prUrlMatch[0] : null;
+    let prUrl: string | null = prUrlMatch ? prUrlMatch[0] : null;
+
+    // Approval checkpoint — pause and ask the user before push/PR when --approve is set
+    let approvalDeclined = false;
+    if (approve && !timedOut && !maxTurnsReached && !processError) {
+        const approved = await promptApproval(branch, cwd, defaultBranch);
+        if (!approved) {
+            approvalDeclined = true;
+            console.log(`\n  Approval declined. Branch "${branch}" left intact.`);
+            console.log(`  Review with: git diff ${defaultBranch}..${branch}\n`);
+            tryUpdateState(cwd, issueNumber, 'failed', {
+                filesChanged: getChangedFiles(cwd, branch, defaultBranch),
+                prUrl: null,
+                failureReason: null,
+                costUsd: usage?.totalCostUsd ?? null,
+            });
+            return { issueNumber, branch, prUrl: null, output, timedOut, maxTurnsReached, processError, usage, sessionStats, timer, approvalDeclined: true };
+        }
+        // User approved — perform the remaining git operations
+        const prBody = extractPrBody(output, issueNumber, issue.title);
+        const newPrUrl = approve === 'before-push'
+            ? performPushAndPr(branch, prBody, issueNumber, issue.title, cwd)
+            : performPrOnly(branch, prBody, issueNumber, issue.title, cwd);
+        if (newPrUrl) {
+            prUrl = newPrUrl;
+            console.log(`\n  ${newPrUrl}\n`);
+        }
+    }
 
     // Populate filesChanged from git and finalize state (done or failed).
     // Failed/timed-out runs leave the state file intact for inspection.
@@ -1029,7 +1301,7 @@ async function fixIssue(
         });
     }
 
-    return { issueNumber, branch, prUrl, output, timedOut, maxTurnsReached, processError, usage, sessionStats, timer };
+    return { issueNumber, branch, prUrl, output, timedOut, maxTurnsReached, processError, usage, sessionStats, timer, approvalDeclined };
 }
 
 async function runWatch(intervalSeconds: number, timeoutMs: number, config: MouseFixesConfig = {}, skipChecks = false): Promise<void> {
@@ -1119,13 +1391,20 @@ async function main(): Promise<void> {
         return;
     }
 
-    const { issueNumbers, timeoutMs, model, maxTurns, skipChecks, dryRun } = command;
+    const { issueNumbers, timeoutMs, model, maxTurns, skipChecks, dryRun, approve } = command;
+
+    if (approve && issueNumbers.length > 1) {
+        console.error('Error: --approve can only be used with a single issue number.');
+        process.exit(1);
+    }
+
     const timer = new StepTimer();
 
     const modelLabel = model ? `  model: ${model}` : '';
     const dryRunLabel = dryRun ? '  [DRY RUN]' : '';
+    const approveLabel = approve ? `  [APPROVE: ${approve}]` : '';
     const issueLabel = issueNumbers.map(n => `#${n}`).join(', ');
-    console.log(`\nmouse-fixes — issue${issueNumbers.length > 1 ? 's' : ''} ${issueLabel}${modelLabel}${dryRunLabel}\n`);
+    console.log(`\nmouse-fixes — issue${issueNumbers.length > 1 ? 's' : ''} ${issueLabel}${modelLabel}${dryRunLabel}${approveLabel}\n`);
 
     // 1. Detect repo (once, shared across all issues)
     let repo: string;
@@ -1152,6 +1431,7 @@ async function main(): Promise<void> {
                 config.branchPrefix,
                 skipChecks,
                 dryRun,
+                approve,
             );
         })
     );
@@ -1167,7 +1447,7 @@ async function main(): Promise<void> {
         if (result.processError) {
             console.warn(`\n  Warning: Claude process encountered an error: ${result.processError.message}`);
         }
-        if (!dryRun && !result.timedOut && !result.maxTurnsReached && !result.processError) {
+        if (!dryRun && !result.approvalDeclined && !result.timedOut && !result.maxTurnsReached && !result.processError) {
             markIssueDone(result.issueNumber, process.cwd(), result.branch);
         }
 
