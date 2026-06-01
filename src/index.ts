@@ -78,7 +78,7 @@ function resolveNextIssue(cwd: string, branchPrefix = 'fix/'): number {
 const DEFAULT_INTERVAL_S = 30;
 
 type Command =
-    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean }
+    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean }
     | { kind: 'start'; timeoutMs: number }
     | { kind: 'watch'; intervalSeconds: number; timeoutMs: number; skipChecks: boolean }
     | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean };
@@ -105,6 +105,7 @@ Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id
   --model <model-id>   Claude model to use (e.g. claude-haiku-4-5-20251001, claude-sonnet-4-6)
                        If omitted, the claude CLI uses its own default
   --max-turns <n>      Max conversation turns Claude may take (default: ${DEFAULT_MAX_TURNS})
+  --dry-run            Apply edits locally but skip commit, push, and PR creation
   --skip-checks        Bypass all pre-flight git safety checks (for CI or advanced users)
 
 Config file (${CONFIG_FILENAME}):
@@ -120,6 +121,7 @@ Config file (${CONFIG_FILENAME}):
 
 Examples:
   mouse-fixes 38
+  mouse-fixes 42 --dry-run
   mouse-fixes 42 43 44
   mouse-fixes https://github.com/owner/repo/issues/38
   mouse-fixes 49 --timeout 300
@@ -139,6 +141,7 @@ Run from inside the target git repository.
     }
 
     const skipChecks = args.includes('--skip-checks');
+    const dryRun = args.includes('--dry-run');
 
     let timeoutS = DEFAULT_TIMEOUT_S;
     const tIdx = args.indexOf('--timeout');
@@ -224,7 +227,7 @@ Run from inside the target git repository.
         issueNumbers = positional.map(arg => parseIssueNumber(arg));
     }
 
-    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks };
+    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks, dryRun };
 }
 
 function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, defaultBranch: string, branch: string): string {
@@ -286,6 +289,40 @@ Closes #${issue.number}
 🐭 Generated with [mouse-fixes](https://github.com/ZhannaM85/mouse-fixes)
 
 After creating the PR, output its URL as the last line of your response.`;
+}
+
+function buildDryRunPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, defaultBranch: string, branch: string): string {
+    const labelList = issue.labels.length ? issue.labels.join(', ') : 'none';
+    return `You are an automated agent fixing GitHub issue #${issue.number} in repository ${repo}.
+
+DRY-RUN MODE: Apply your code edits locally but do NOT run git commit, git push, or gh pr create. Leave the branch checked out so the user can review changes with git diff.
+
+Title: ${issue.title}
+Labels: ${labelList}
+
+Description:
+${issue.body || '(no description provided)'}
+
+Instructions:
+1. FIRST — reset to ${defaultBranch} and create the feature branch before touching any files:
+   git checkout ${defaultBranch} && git pull origin ${defaultBranch} && git checkout -b ${branch}
+
+2. Read the relevant source files, understand the problem, and implement a minimal fix.
+   Follow the existing code style and patterns in this repository.
+
+3. After applying your changes, output a dry-run summary in this exact format:
+
+DRY-RUN SUMMARY
+Branch: ${branch}
+Commit message: Fix #${issue.number}: ${issue.title}
+Files changed:
+  - <path/to/file1>: <brief description of change>
+  - <path/to/file2>: <brief description of change>
+
+Description:
+<1-3 sentences describing what was changed and why>
+
+Do NOT run git commit, git push, or gh pr create. The branch is left checked out for the user to review with \`git diff\`.`;
 }
 
 function buildStartPrompt(repo: string, issues: Issue[]): string {
@@ -869,7 +906,8 @@ async function fixIssue(
     prefix = '',
     configBaseBranch?: string,
     branchPrefix = 'fix/',
-    skipChecks = false
+    skipChecks = false,
+    dryRun = false
 ): Promise<{ issueNumber: number; branch: string; prUrl: string | null; output: string; timedOut: boolean; maxTurnsReached: boolean; processError?: Error; usage: UsageStats | null; sessionStats: SessionStats | null; timer: StepTimer }> {
     const timer = new StepTimer();
     const cwd = process.cwd();
@@ -913,11 +951,16 @@ async function fixIssue(
         }
     }
 
-    const prompt = buildPrompt(repo, issue, defaultBranch, branch);
+    const prompt = dryRun
+        ? buildDryRunPrompt(repo, issue, defaultBranch, branch)
+        : buildPrompt(repo, issue, defaultBranch, branch);
     let claudeResult: Awaited<ReturnType<typeof spawnClaude>>;
     {
         // Update state with the computed branch and advance to claude-running
         tryUpdateState(cwd, issueNumber, 'claude-running', { branch });
+        if (dryRun) {
+            console.log(`  DRY-RUN: Claude will apply edits locally — no commit, push, or PR.`);
+        }
         console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
         const done = timer.start(`Claude fix + git + PR (#${issueNumber})`);
         claudeResult = await spawnClaude(prompt, cwd, timeoutMs, model, maxTurns, prefix);
@@ -1076,12 +1119,13 @@ async function main(): Promise<void> {
         return;
     }
 
-    const { issueNumbers, timeoutMs, model, maxTurns, skipChecks } = command;
+    const { issueNumbers, timeoutMs, model, maxTurns, skipChecks, dryRun } = command;
     const timer = new StepTimer();
 
     const modelLabel = model ? `  model: ${model}` : '';
+    const dryRunLabel = dryRun ? '  [DRY RUN]' : '';
     const issueLabel = issueNumbers.map(n => `#${n}`).join(', ');
-    console.log(`\nmouse-fixes — issue${issueNumbers.length > 1 ? 's' : ''} ${issueLabel}${modelLabel}\n`);
+    console.log(`\nmouse-fixes — issue${issueNumbers.length > 1 ? 's' : ''} ${issueLabel}${modelLabel}${dryRunLabel}\n`);
 
     // 1. Detect repo (once, shared across all issues)
     let repo: string;
@@ -1107,6 +1151,7 @@ async function main(): Promise<void> {
                 config.defaultBaseBranch,
                 config.branchPrefix,
                 skipChecks,
+                dryRun,
             );
         })
     );
@@ -1122,13 +1167,17 @@ async function main(): Promise<void> {
         if (result.processError) {
             console.warn(`\n  Warning: Claude process encountered an error: ${result.processError.message}`);
         }
-        if (!result.timedOut && !result.maxTurnsReached && !result.processError) {
+        if (!dryRun && !result.timedOut && !result.maxTurnsReached && !result.processError) {
             markIssueDone(result.issueNumber, process.cwd(), result.branch);
         }
 
         // Print Claude's final output (should include the PR URL on the last line)
         if (result.output && result.output !== '(no summary)') {
             console.log(`\n${result.output}\n`);
+        }
+
+        if (dryRun) {
+            console.log(`  Dry-run complete. Review changes with: git diff ${result.branch}\n`);
         }
 
         result.timer.report(result.sessionStats ?? undefined);
