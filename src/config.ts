@@ -4,6 +4,7 @@ import { join } from 'node:path';
 export interface MouseFixesConfig {
     model?: string;
     maxTurns?: number;
+    maxCost?: number;
     defaultBaseBranch?: string;
     branchPrefix?: string;
     logDir?: string;
@@ -122,6 +123,17 @@ export function loadConfig(cwd: string = process.cwd()): MouseFixesConfig {
 
     if (raw.branchPrefix) {
         config.branchPrefix = raw.branchPrefix;
+    }
+
+    if (raw.maxCost !== undefined && raw.maxCost !== '') {
+        const n = parseFloat(raw.maxCost);
+        if (isNaN(n) || n <= 0) {
+            console.error(
+                `Error: ${CONFIG_FILENAME}: "maxCost" must be a positive number (USD), got: "${raw.maxCost}"`
+            );
+            process.exit(1);
+        }
+        config.maxCost = n;
     }
 
     if (raw.logDir) {
