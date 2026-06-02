@@ -113,3 +113,5 @@ Prompt caching keeps repeat runs cheap: once Claude has read the main source fil
 | Issue not found | Error printed, exits before touching git |
 | Not in a git repo | Error printed, exits immediately |
 | Claude times out | Warning printed; whatever Claude managed to do is left in place |
+
+This Readme keeps being updated based on the chages in the code.
