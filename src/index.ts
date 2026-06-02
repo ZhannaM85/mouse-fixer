@@ -82,7 +82,7 @@ const DEFAULT_INTERVAL_S = 30;
 type ApproveCheckpoint = 'before-push' | 'before-pr';
 
 type Command =
-    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean; approve?: ApproveCheckpoint }
+    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean; approve?: ApproveCheckpoint; maxCost?: number }
     | { kind: 'start'; timeoutMs: number }
     | { kind: 'watch'; intervalSeconds: number; timeoutMs: number; skipChecks: boolean }
     | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean };
@@ -111,15 +111,17 @@ Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id
   --max-turns <n>      Max conversation turns Claude may take (default: ${DEFAULT_MAX_TURNS})
   --approve <stage>    Pause for human approval at "before-push" or "before-pr"
   --dry-run            Apply edits locally but skip commit, push, and PR creation
+  --max-cost <dollars> Skip PR if actual run cost exceeds this limit (e.g. 1.50)
   --skip-checks        Bypass all pre-flight git safety checks (for CI or advanced users)
 
 Config file (${CONFIG_FILENAME}):
   Place a ${CONFIG_FILENAME} file in the repo root to set per-repo defaults.
   CLI flags always override config file values.
-  Supported keys: model, maxTurns, defaultBaseBranch, branchPrefix, logDir
+  Supported keys: model, maxTurns, maxCost, defaultBaseBranch, branchPrefix, logDir
   Example:
     model: claude-sonnet-4-6
     maxTurns: 30
+    maxCost: 2.00
     defaultBaseBranch: main
     branchPrefix: fix/
     logDir: logs/
@@ -135,6 +137,8 @@ Examples:
   mouse-fixes 42 --model claude-haiku-4-5-20251001
   mouse-fixes 43 --model claude-sonnet-4-6
   mouse-fixes 42 --max-turns 30
+  mouse-fixes 42 --max-cost 1.50
+  mouse-fixes next --max-cost 0.50
   mouse-fixes next
   mouse-fixes start
   mouse-fixes resume
@@ -206,6 +210,18 @@ Run from inside the target git repository.
         maxTurns = val;
     }
 
+    // maxCost: CLI --max-cost overrides config
+    let maxCost: number | undefined = config.maxCost;
+    const mcIdx = args.indexOf('--max-cost');
+    if (mcIdx !== -1) {
+        const val = parseFloat(args[mcIdx + 1]);
+        if (isNaN(val) || val <= 0) {
+            console.error('Error: --max-cost must be a positive number (USD).');
+            process.exit(1);
+        }
+        maxCost = val;
+    }
+
     // --watch mode
     const watchIdx = args.indexOf('--watch');
     if (watchIdx !== -1) {
@@ -224,7 +240,7 @@ Run from inside the target git repository.
 
     // Identify indices consumed by flags so we can exclude them from positional args
     const flagIndices = new Set<number>();
-    [tIdx, mIdx, mtIdx].forEach(idx => {
+    [tIdx, mIdx, mtIdx, mcIdx].forEach(idx => {
         if (idx !== -1) {
             flagIndices.add(idx);
             flagIndices.add(idx + 1);
@@ -258,7 +274,7 @@ Run from inside the target git repository.
         issueNumbers = positional.map(arg => parseIssueNumber(arg));
     }
 
-    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks, dryRun, approve };
+    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks, dryRun, approve, maxCost };
 }
 
 function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, defaultBranch: string, branch: string): string {
@@ -1148,7 +1164,8 @@ async function fixIssue(
     branchPrefix = 'fix/',
     skipChecks = false,
     dryRun = false,
-    approve?: ApproveCheckpoint
+    approve?: ApproveCheckpoint,
+    maxCost?: number
 ): Promise<{ issueNumber: number; branch: string; prUrl: string | null; output: string; timedOut: boolean; maxTurnsReached: boolean; processError?: Error; usage: UsageStats | null; sessionStats: SessionStats | null; timer: StepTimer; approvalDeclined: boolean }> {
     const timer = new StepTimer();
     const cwd = process.cwd();
@@ -1192,11 +1209,14 @@ async function fixIssue(
         }
     }
 
+    // When --max-cost is set (and not overridden by another gate), use before-pr style:
+    // Claude commits + pushes but does NOT open the PR, so the cost gate can intercept it.
+    const prGateActive = maxCost !== undefined && !dryRun && approve !== 'before-push';
     const prompt = dryRun
         ? buildDryRunPrompt(repo, issue, defaultBranch, branch)
         : approve === 'before-push'
         ? buildApproveBeforePushPrompt(repo, issue, defaultBranch, branch)
-        : approve === 'before-pr'
+        : (approve === 'before-pr' || prGateActive)
         ? buildApproveBeforePrPrompt(repo, issue, defaultBranch, branch)
         : buildPrompt(repo, issue, defaultBranch, branch);
     let claudeResult: Awaited<ReturnType<typeof spawnClaude>>;
@@ -1234,30 +1254,52 @@ async function fixIssue(
     const prUrlMatch = [...trimmed.matchAll(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/g)].at(-1);
     let prUrl: string | null = prUrlMatch ? prUrlMatch[0] : null;
 
-    // Approval checkpoint — pause and ask the user before push/PR when --approve is set
+    // Post-run gate: cost check and optional human approval
     let approvalDeclined = false;
-    if (approve && !timedOut && !maxTurnsReached && !processError) {
-        const approved = await promptApproval(branch, cwd, defaultBranch);
-        if (!approved) {
-            approvalDeclined = true;
-            console.log(`\n  Approval declined. Branch "${branch}" left intact.`);
-            console.log(`  Review with: git diff ${defaultBranch}..${branch}\n`);
+    if (!timedOut && !maxTurnsReached && !processError) {
+        // Cost gate — checked before user prompt so an over-budget run skips approval too
+        if (prGateActive && usage !== null && usage.totalCostUsd > maxCost!) {
+            console.warn(`\n  Run cost $${usage.totalCostUsd.toFixed(2)} exceeded --max-cost $${maxCost!.toFixed(2)} — PR not opened`);
+            console.warn(`  Branch "${branch}" left intact for inspection.`);
             tryUpdateState(cwd, issueNumber, 'failed', {
                 filesChanged: getChangedFiles(cwd, branch, defaultBranch),
                 prUrl: null,
-                failureReason: null,
-                costUsd: usage?.totalCostUsd ?? null,
+                failureReason: 'costExceeded',
+                costUsd: usage.totalCostUsd,
             });
-            return { issueNumber, branch, prUrl: null, output, timedOut, maxTurnsReached, processError, usage, sessionStats, timer, approvalDeclined: true };
+            return { issueNumber, branch, prUrl: null, output, timedOut, maxTurnsReached, processError, usage, sessionStats, timer, approvalDeclined: false };
         }
-        // User approved — perform the remaining git operations
-        const prBody = extractPrBody(output, issueNumber, issue.title);
-        const newPrUrl = approve === 'before-push'
-            ? performPushAndPr(branch, prBody, issueNumber, issue.title, cwd)
-            : performPrOnly(branch, prBody, issueNumber, issue.title, cwd);
-        if (newPrUrl) {
-            prUrl = newPrUrl;
-            console.log(`\n  ${newPrUrl}\n`);
+
+        if (approve) {
+            const approved = await promptApproval(branch, cwd, defaultBranch);
+            if (!approved) {
+                approvalDeclined = true;
+                console.log(`\n  Approval declined. Branch "${branch}" left intact.`);
+                console.log(`  Review with: git diff ${defaultBranch}..${branch}\n`);
+                tryUpdateState(cwd, issueNumber, 'failed', {
+                    filesChanged: getChangedFiles(cwd, branch, defaultBranch),
+                    prUrl: null,
+                    failureReason: null,
+                    costUsd: usage?.totalCostUsd ?? null,
+                });
+                return { issueNumber, branch, prUrl: null, output, timedOut, maxTurnsReached, processError, usage, sessionStats, timer, approvalDeclined: true };
+            }
+            // User approved — perform the remaining git operations
+            const prBody = extractPrBody(output, issueNumber, issue.title);
+            const newPrUrl = approve === 'before-push'
+                ? performPushAndPr(branch, prBody, issueNumber, issue.title, cwd)
+                : performPrOnly(branch, prBody, issueNumber, issue.title, cwd);
+            if (newPrUrl) {
+                prUrl = newPrUrl;
+                console.log(`\n  ${newPrUrl}\n`);
+            }
+        } else if (prGateActive) {
+            // Cost gate passed — auto-create PR
+            const prBody = extractPrBody(output, issueNumber, issue.title);
+            const newPrUrl = performPrOnly(branch, prBody, issueNumber, issue.title, cwd);
+            if (newPrUrl) {
+                prUrl = newPrUrl;
+            }
         }
     }
 
@@ -1359,6 +1401,9 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
                         config.defaultBaseBranch,
                         config.branchPrefix,
                         skipChecks,
+                        false,
+                        undefined,
+                        config.maxCost,
                     );
                 })
             );
@@ -1391,7 +1436,7 @@ async function main(): Promise<void> {
         return;
     }
 
-    const { issueNumbers, timeoutMs, model, maxTurns, skipChecks, dryRun, approve } = command;
+    const { issueNumbers, timeoutMs, model, maxTurns, skipChecks, dryRun, approve, maxCost } = command;
 
     if (approve && issueNumbers.length > 1) {
         console.error('Error: --approve can only be used with a single issue number.');
@@ -1403,8 +1448,9 @@ async function main(): Promise<void> {
     const modelLabel = model ? `  model: ${model}` : '';
     const dryRunLabel = dryRun ? '  [DRY RUN]' : '';
     const approveLabel = approve ? `  [APPROVE: ${approve}]` : '';
+    const maxCostLabel = maxCost !== undefined ? `  [MAX-COST: $${maxCost.toFixed(2)}]` : '';
     const issueLabel = issueNumbers.map(n => `#${n}`).join(', ');
-    console.log(`\nmouse-fixes — issue${issueNumbers.length > 1 ? 's' : ''} ${issueLabel}${modelLabel}${dryRunLabel}${approveLabel}\n`);
+    console.log(`\nmouse-fixes — issue${issueNumbers.length > 1 ? 's' : ''} ${issueLabel}${modelLabel}${dryRunLabel}${approveLabel}${maxCostLabel}\n`);
 
     // 1. Detect repo (once, shared across all issues)
     let repo: string;
@@ -1432,6 +1478,7 @@ async function main(): Promise<void> {
                 skipChecks,
                 dryRun,
                 approve,
+                maxCost,
             );
         })
     );

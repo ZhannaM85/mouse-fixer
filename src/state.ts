@@ -12,7 +12,7 @@ export type RunStage =
  * Structured reason a run did not complete successfully.
  * Replaces the former boolean `timedOut` field.
  */
-export type FailureReason = 'timedOut' | 'maxTurnsReached' | 'error' | null;
+export type FailureReason = 'timedOut' | 'maxTurnsReached' | 'error' | 'costExceeded' | null;
 
 export interface RunState {
     issue: number;
