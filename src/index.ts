@@ -1007,14 +1007,58 @@ function markIssueDone(issueNumber: number, cwd: string, branch: string): void {
     } catch { /* non-fatal — best-effort */ }
 }
 
-function performAutoMerge(prUrl: string, defaultBranch: string, cwd: string): void {
+async function performAutoMerge(prUrl: string, defaultBranch: string, cwd: string): Promise<void> {
+    // Try immediate merge first; if checks are pending, enable GitHub auto-merge and poll.
+    let waitForChecks = false;
     try {
         execSync(`gh pr merge "${prUrl}" --squash --delete-branch --yes`, { cwd, stdio: 'pipe' });
         console.log(`  Auto-merged: ${prUrl}`);
-    } catch (e) {
-        console.warn(`  Warning: auto-merge failed — ${(e as Error).message}`);
-        return;
+    } catch {
+        // Immediate merge failed (likely pending required checks) — try GitHub auto-merge.
+        try {
+            execSync(`gh pr merge "${prUrl}" --squash --delete-branch --auto`, { cwd, stdio: 'pipe' });
+            waitForChecks = true;
+            console.log(`  Waiting for CI checks before merging: ${prUrl}`);
+        } catch (e2) {
+            console.warn(`  Warning: auto-merge failed — ${(e2 as Error).message}`);
+            console.warn('  Tip: enable "Allow auto-merge" in the repo Settings → General to use this feature.');
+            return;
+        }
     }
+
+    if (waitForChecks) {
+        const TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes
+        const POLL_MS = 15_000;
+        const deadline = Date.now() + TIMEOUT_MS;
+        let polls = 0;
+        while (Date.now() < deadline) {
+            await new Promise<void>(resolve => setTimeout(resolve, POLL_MS));
+            polls++;
+            try {
+                const prData = JSON.parse(
+                    execSync(`gh pr view "${prUrl}" --json state`, { cwd, encoding: 'utf8' }).trim()
+                ) as { state: string };
+                if (prData.state === 'MERGED') {
+                    console.log(`  Merged: ${prUrl}`);
+                    break;
+                }
+                if (prData.state === 'CLOSED') {
+                    console.warn(`  Warning: PR was closed without merging.`);
+                    return;
+                }
+            } catch { /* ignore transient poll errors */ }
+            // Progress message every ~60s
+            if (polls % 4 === 0) {
+                const elapsed = Math.round((Date.now() - (deadline - TIMEOUT_MS)) / 1000);
+                console.log(`  Still waiting… (${elapsed}s elapsed)`);
+            }
+        }
+        if (Date.now() >= deadline) {
+            console.warn(`  Warning: timed out (20 min) waiting for PR to merge — skipping pull.`);
+            return;
+        }
+    }
+
     try {
         execSync(`git checkout ${defaultBranch}`, { cwd, stdio: 'pipe' });
         execSync(`git pull origin ${defaultBranch}`, { cwd, stdio: 'pipe' });
@@ -1521,7 +1565,7 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
                     if (success) {
                         markIssueDone(result.issueNumber, cwd, result.branch);
                         if (result.prUrl) {
-                            performAutoMerge(result.prUrl, defaultBranch, cwd);
+                            await performAutoMerge(result.prUrl, defaultBranch, cwd);
                         }
                     }
                 }
