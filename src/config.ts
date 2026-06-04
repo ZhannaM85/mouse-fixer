@@ -9,6 +9,7 @@ export interface MouseFixesConfig {
     branchPrefix?: string;
     logDir?: string;
     autoMerge?: boolean;
+    worktree?: boolean;
 }
 
 export const CONFIG_FILENAME = '.mouse-fixes.yml';
@@ -33,6 +34,7 @@ const KNOWN_KEYS = new Set([
     'qualityMode',
     'ignoredPaths',
     'approve',
+    'worktree',
 ]);
 
 /**
@@ -150,6 +152,16 @@ export function loadConfig(cwd: string = process.cwd()): MouseFixesConfig {
             process.exit(1);
         }
         config.autoMerge = raw.autoMerge === 'true';
+    }
+
+    if (raw.worktree !== undefined && raw.worktree !== '') {
+        if (raw.worktree !== 'true' && raw.worktree !== 'false') {
+            console.error(
+                `Error: ${CONFIG_FILENAME}: "worktree" must be true or false, got: "${raw.worktree}"`
+            );
+            process.exit(1);
+        }
+        config.worktree = raw.worktree === 'true';
     }
 
     return config;

@@ -1,4 +1,6 @@
 import { execSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 function exec(cmd: string): string {
     return execSync(cmd, { encoding: 'utf8', cwd: process.cwd() }).trim();
@@ -156,6 +158,17 @@ export function slugify(title: string, maxLen = 40): string {
         .replace(/^-|-$/g, '')
         .slice(0, maxLen)
         .replace(/-$/, '');
+}
+
+export function createWorktree(cwd: string, worktreePath: string, branch: string): void {
+    mkdirSync(dirname(worktreePath), { recursive: true });
+    execSync(`git worktree add "${worktreePath}" -b "${branch}"`, { encoding: 'utf8', cwd, stdio: 'pipe' });
+}
+
+export function removeWorktree(cwd: string, worktreePath: string): void {
+    try {
+        execSync(`git worktree remove "${worktreePath}" --force`, { encoding: 'utf8', cwd, stdio: 'pipe' });
+    } catch { /* best-effort cleanup */ }
 }
 
 export function detectDefaultBranch(): string {
