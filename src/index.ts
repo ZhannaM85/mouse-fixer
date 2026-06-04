@@ -6,7 +6,7 @@ import { createInterface } from 'node:readline';
 import { tmpdir } from 'node:os';
 import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue, fetchAllIssues, Issue } from './github.js';
-import { detectRepo, slugify, getGitDiffStats, getChangedFiles, detectDefaultBranch, runPreflightChecks } from './git.js';
+import { detectRepo, slugify, getGitDiffStats, getChangedFiles, detectDefaultBranch, runPreflightChecks, createWorktree, removeWorktree } from './git.js';
 import { createState, updateState, readState, RunStage, RunState, FailureReason } from './state.js';
 import { spawnClaude, UsageStats, runPostMortem } from './runner.js';
 import { loadConfig, MouseFixesConfig, CONFIG_FILENAME } from './config.js';
@@ -82,7 +82,7 @@ const DEFAULT_INTERVAL_S = 30;
 type ApproveCheckpoint = 'before-push' | 'before-pr';
 
 type Command =
-    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean; approve?: ApproveCheckpoint; maxCost?: number; autoMerge: boolean }
+    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean; approve?: ApproveCheckpoint; maxCost?: number; autoMerge: boolean; worktree: boolean }
     | { kind: 'start'; timeoutMs: number }
     | { kind: 'watch'; intervalSeconds: number; timeoutMs: number; skipChecks: boolean; autoMerge: boolean }
     | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean };
@@ -113,12 +113,13 @@ Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id
   --dry-run            Apply edits locally but skip commit, push, and PR creation
   --max-cost <dollars> Skip PR if actual run cost exceeds this limit (e.g. 1.50)
   --auto-merge         After PR creation, merge the PR and pull main before the next issue
+  --worktree           Run each issue in an isolated git worktree (keeps main tree clean)
   --skip-checks        Bypass all pre-flight git safety checks (for CI or advanced users)
 
 Config file (${CONFIG_FILENAME}):
   Place a ${CONFIG_FILENAME} file in the repo root to set per-repo defaults.
   CLI flags always override config file values.
-  Supported keys: model, maxTurns, maxCost, defaultBaseBranch, branchPrefix, logDir, autoMerge
+  Supported keys: model, maxTurns, maxCost, defaultBaseBranch, branchPrefix, logDir, autoMerge, worktree
   Example:
     model: claude-sonnet-4-6
     maxTurns: 30
@@ -126,9 +127,11 @@ Config file (${CONFIG_FILENAME}):
     defaultBaseBranch: main
     branchPrefix: fix/
     logDir: logs/
+    worktree: true
 
 Examples:
   mouse-fixes 38
+  mouse-fixes 42 --worktree
   mouse-fixes 42 --approve=before-push
   mouse-fixes 42 --approve=before-pr
   mouse-fixes 42 --dry-run
@@ -155,6 +158,7 @@ Run from inside the target git repository.
     const skipChecks = args.includes('--skip-checks');
     const dryRun = args.includes('--dry-run');
     const autoMerge = args.includes('--auto-merge') || (config.autoMerge ?? false);
+    const worktree = args.includes('--worktree') || (config.worktree ?? false);
 
     if (autoMerge && dryRun) {
         console.error('Error: --auto-merge and --dry-run cannot be used together.');
@@ -281,7 +285,7 @@ Run from inside the target git repository.
         issueNumbers = positional.map(arg => parseIssueNumber(arg));
     }
 
-    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks, dryRun, approve, maxCost, autoMerge };
+    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks, dryRun, approve, maxCost, autoMerge, worktree };
 }
 
 function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, defaultBranch: string, branch: string): string {
@@ -319,6 +323,68 @@ Instructions:
 
 4. After the PR is open, return to ${defaultBranch}:
    git checkout ${defaultBranch}
+
+Use this format for the PR body:
+
+## Summary
+
+- <bullet describing the first change and why>
+- <additional bullets as needed>
+
+## Files changed
+
+| File | Change |
+|------|--------|
+| \`filename.ts\` | what changed in this file |
+
+## Acceptance criteria
+
+- [ ] <first criterion from the issue, checked off conceptually>
+- [ ] <additional criteria as needed>
+
+Closes #${issue.number}
+
+🐭 Generated with [mouse-fixes](https://github.com/ZhannaM85/mouse-fixes)
+
+After creating the PR, output its URL as the last line of your response.`;
+}
+
+function buildWorktreePrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, branch: string): string {
+    const labelList = issue.labels.length ? issue.labels.join(', ') : 'none';
+    return `You are an automated agent fixing GitHub issue #${issue.number} in repository ${repo}.
+
+IMPORTANT — AUTOMATED MODE: This script has full authorization to run all git commands. You MUST commit, push, and open a PR as instructed below. Do NOT skip the git workflow. Any general memory rules about not committing without explicit permission do NOT apply here — this prompt is that explicit permission.
+
+WORKTREE MODE: You are running in an isolated git worktree. The branch "${branch}" is already checked out here — do NOT run git checkout or git pull.
+
+Title: ${issue.title}
+Labels: ${labelList}
+
+Description:
+${issue.body || '(no description provided)'}
+
+Instructions:
+1. Verify you are on the correct branch (it should show: ${branch}):
+   git branch --show-current
+
+2. Read the relevant source files, understand the problem, and implement a minimal fix.
+   Follow the existing code style and patterns in this repository.
+
+3. AFTER all code changes are done — run the full git workflow:
+   a. Stage only the files you changed (list them explicitly, do not use git add -A):
+      git add <file1> <file2> ...
+   b. Commit:
+      git commit -m "Fix #${issue.number}: ${issue.title}"
+   c. Push:
+      git push -u origin ${branch}
+   d. Open a PR. Write the PR body to a temp file first, then pass it via --body-file:
+      Use the system temp directory — NEVER write inside the repo folder.
+      On Windows use: $env:TEMP\\pr-body.md or %TEMP%\\pr-body.md
+      On Linux/Mac use: /tmp/pr-body.md
+      Then run:
+      gh pr create --title "Fix #${issue.number}: ${issue.title}" --body-file <temp-path>
+
+4. After the PR is open, do NOT switch branches. The worktree will be cleaned up automatically.
 
 Use this format for the PR body:
 
@@ -1189,7 +1255,8 @@ async function fixIssue(
     skipChecks = false,
     dryRun = false,
     approve?: ApproveCheckpoint,
-    maxCost?: number
+    maxCost?: number,
+    useWorktree = false,
 ): Promise<{ issueNumber: number; branch: string; prUrl: string | null; output: string; timedOut: boolean; maxTurnsReached: boolean; processError?: Error; usage: UsageStats | null; sessionStats: SessionStats | null; timer: StepTimer; approvalDeclined: boolean }> {
     const timer = new StepTimer();
     const cwd = process.cwd();
@@ -1233,6 +1300,23 @@ async function fixIssue(
         }
     }
 
+    // Create an isolated git worktree for this issue run if requested.
+    // effectiveCwd is where Claude will run; worktreePath is cleaned up after the run.
+    let effectiveCwd = cwd;
+    let worktreePath: string | null = null;
+    if (useWorktree) {
+        worktreePath = join(cwd, '.mouse-fixes', 'worktrees', `issue-${issueNumber}`);
+        try {
+            createWorktree(cwd, worktreePath, branch);
+            effectiveCwd = worktreePath;
+            console.log(`  Worktree: ${worktreePath}`);
+        } catch (e) {
+            tryUpdateState(cwd, issueNumber, 'failed', { failureReason: 'error' });
+            console.error(`  Error creating worktree: ${(e as Error).message}`);
+            process.exit(1);
+        }
+    }
+
     // When --max-cost is set (and not overridden by another gate), use before-pr style:
     // Claude commits + pushes but does NOT open the PR, so the cost gate can intercept it.
     const prGateActive = maxCost !== undefined && !dryRun && approve !== 'before-push';
@@ -1242,6 +1326,8 @@ async function fixIssue(
         ? buildApproveBeforePushPrompt(repo, issue, defaultBranch, branch)
         : (approve === 'before-pr' || prGateActive)
         ? buildApproveBeforePrPrompt(repo, issue, defaultBranch, branch)
+        : useWorktree
+        ? buildWorktreePrompt(repo, issue, branch)
         : buildPrompt(repo, issue, defaultBranch, branch);
     let claudeResult: Awaited<ReturnType<typeof spawnClaude>>;
     {
@@ -1252,8 +1338,15 @@ async function fixIssue(
         }
         console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
         const done = timer.start(`Claude fix + git + PR (#${issueNumber})`);
-        claudeResult = await spawnClaude(prompt, cwd, timeoutMs, model, maxTurns, prefix);
+        claudeResult = await spawnClaude(prompt, effectiveCwd, timeoutMs, model, maxTurns, prefix);
         done(claudeResult.toolCallLog || undefined);
+    }
+
+    // Remove the worktree now that Claude has finished. The branch and its commits
+    // remain in the shared git database and are accessible from the main working tree.
+    if (worktreePath) {
+        removeWorktree(cwd, worktreePath);
+        worktreePath = null;
     }
 
     const { summary: output, timedOut, maxTurnsReached, processError, usage } = claudeResult;
@@ -1422,7 +1515,7 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
                         i.number, repo, timeoutMs,
                         config.model, config.maxTurns ?? DEFAULT_MAX_TURNS,
                         '', config.defaultBaseBranch, config.branchPrefix, skipChecks,
-                        false, undefined, config.maxCost,
+                        false, undefined, config.maxCost, config.worktree ?? false,
                     );
                     const success = !result.timedOut && !result.maxTurnsReached && !result.processError;
                     if (success) {
@@ -1441,7 +1534,7 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
                             i.number, repo, timeoutMs,
                             config.model, config.maxTurns ?? DEFAULT_MAX_TURNS,
                             prefix, config.defaultBaseBranch, config.branchPrefix, skipChecks,
-                            false, undefined, config.maxCost,
+                            false, undefined, config.maxCost, config.worktree ?? false,
                         );
                     })
                 );
@@ -1475,7 +1568,7 @@ async function main(): Promise<void> {
         return;
     }
 
-    const { issueNumbers, timeoutMs, model, maxTurns, skipChecks, dryRun, approve, maxCost, autoMerge } = command;
+    const { issueNumbers, timeoutMs, model, maxTurns, skipChecks, dryRun, approve, maxCost, autoMerge, worktree } = command;
 
     if (approve && issueNumbers.length > 1) {
         console.error('Error: --approve can only be used with a single issue number.');
@@ -1489,8 +1582,9 @@ async function main(): Promise<void> {
     const approveLabel = approve ? `  [APPROVE: ${approve}]` : '';
     const maxCostLabel = maxCost !== undefined ? `  [MAX-COST: $${maxCost.toFixed(2)}]` : '';
     const autoMergeLabel = autoMerge ? '  [AUTO-MERGE]' : '';
+    const worktreeLabel = worktree ? '  [WORKTREE]' : '';
     const issueLabel = issueNumbers.map(n => `#${n}`).join(', ');
-    console.log(`\nmouse-fixes — issue${issueNumbers.length > 1 ? 's' : ''} ${issueLabel}${modelLabel}${dryRunLabel}${approveLabel}${maxCostLabel}${autoMergeLabel}\n`);
+    console.log(`\nmouse-fixes — issue${issueNumbers.length > 1 ? 's' : ''} ${issueLabel}${modelLabel}${dryRunLabel}${approveLabel}${maxCostLabel}${autoMergeLabel}${worktreeLabel}\n`);
 
     // 1. Detect repo (once, shared across all issues)
     let repo: string;
@@ -1518,7 +1612,7 @@ async function main(): Promise<void> {
         for (const n of issueNumbers) {
             const result = await fixIssue(
                 n, repo, timeoutMs, model, maxTurns, '',
-                config.defaultBaseBranch, config.branchPrefix, skipChecks, dryRun, approve, maxCost,
+                config.defaultBaseBranch, config.branchPrefix, skipChecks, dryRun, approve, maxCost, worktree,
             );
             results.push(result);
             const success = !result.timedOut && !result.maxTurnsReached && !result.processError && !result.approvalDeclined;
@@ -1535,7 +1629,7 @@ async function main(): Promise<void> {
                 const prefix = issueNumbers.length > 1 ? `[#${n}] ` : '';
                 return fixIssue(
                     n, repo, timeoutMs, model, maxTurns, prefix,
-                    config.defaultBaseBranch, config.branchPrefix, skipChecks, dryRun, approve, maxCost,
+                    config.defaultBaseBranch, config.branchPrefix, skipChecks, dryRun, approve, maxCost, worktree,
                 );
             })
         );
