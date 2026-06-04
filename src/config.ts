@@ -8,6 +8,7 @@ export interface MouseFixesConfig {
     defaultBaseBranch?: string;
     branchPrefix?: string;
     logDir?: string;
+    autoMerge?: boolean;
 }
 
 export const CONFIG_FILENAME = '.mouse-fixes.yml';
@@ -24,6 +25,7 @@ const KNOWN_KEYS = new Set([
     'defaultBaseBranch',
     'branchPrefix',
     'logDir',
+    'autoMerge',
     // Future keys (owned by their respective feature issues)
     'autoPush',
     'maxCost',
@@ -138,6 +140,16 @@ export function loadConfig(cwd: string = process.cwd()): MouseFixesConfig {
 
     if (raw.logDir) {
         config.logDir = raw.logDir;
+    }
+
+    if (raw.autoMerge !== undefined && raw.autoMerge !== '') {
+        if (raw.autoMerge !== 'true' && raw.autoMerge !== 'false') {
+            console.error(
+                `Error: ${CONFIG_FILENAME}: "autoMerge" must be true or false, got: "${raw.autoMerge}"`
+            );
+            process.exit(1);
+        }
+        config.autoMerge = raw.autoMerge === 'true';
     }
 
     return config;

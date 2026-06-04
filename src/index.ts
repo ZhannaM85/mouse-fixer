@@ -82,9 +82,9 @@ const DEFAULT_INTERVAL_S = 30;
 type ApproveCheckpoint = 'before-push' | 'before-pr';
 
 type Command =
-    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean; approve?: ApproveCheckpoint; maxCost?: number }
+    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean; approve?: ApproveCheckpoint; maxCost?: number; autoMerge: boolean }
     | { kind: 'start'; timeoutMs: number }
-    | { kind: 'watch'; intervalSeconds: number; timeoutMs: number; skipChecks: boolean }
+    | { kind: 'watch'; intervalSeconds: number; timeoutMs: number; skipChecks: boolean; autoMerge: boolean }
     | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean };
 
 function parseArgs(config: MouseFixesConfig = {}): Command {
@@ -112,12 +112,13 @@ Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id
   --approve <stage>    Pause for human approval at "before-push" or "before-pr"
   --dry-run            Apply edits locally but skip commit, push, and PR creation
   --max-cost <dollars> Skip PR if actual run cost exceeds this limit (e.g. 1.50)
+  --auto-merge         After PR creation, merge the PR and pull main before the next issue
   --skip-checks        Bypass all pre-flight git safety checks (for CI or advanced users)
 
 Config file (${CONFIG_FILENAME}):
   Place a ${CONFIG_FILENAME} file in the repo root to set per-repo defaults.
   CLI flags always override config file values.
-  Supported keys: model, maxTurns, maxCost, defaultBaseBranch, branchPrefix, logDir
+  Supported keys: model, maxTurns, maxCost, defaultBaseBranch, branchPrefix, logDir, autoMerge
   Example:
     model: claude-sonnet-4-6
     maxTurns: 30
@@ -153,6 +154,12 @@ Run from inside the target git repository.
 
     const skipChecks = args.includes('--skip-checks');
     const dryRun = args.includes('--dry-run');
+    const autoMerge = args.includes('--auto-merge') || (config.autoMerge ?? false);
+
+    if (autoMerge && dryRun) {
+        console.error('Error: --auto-merge and --dry-run cannot be used together.');
+        process.exit(1);
+    }
 
     let approve: ApproveCheckpoint | undefined;
     const approveEqIdx = args.findIndex(a => a.startsWith('--approve='));
@@ -235,7 +242,7 @@ Run from inside the target git repository.
             }
             intervalSeconds = val;
         }
-        return { kind: 'watch', intervalSeconds, timeoutMs: timeoutS * 1000, skipChecks };
+        return { kind: 'watch', intervalSeconds, timeoutMs: timeoutS * 1000, skipChecks, autoMerge };
     }
 
     // Identify indices consumed by flags so we can exclude them from positional args
@@ -274,7 +281,7 @@ Run from inside the target git repository.
         issueNumbers = positional.map(arg => parseIssueNumber(arg));
     }
 
-    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks, dryRun, approve, maxCost };
+    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks, dryRun, approve, maxCost, autoMerge };
 }
 
 function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, defaultBranch: string, branch: string): string {
@@ -934,6 +941,23 @@ function markIssueDone(issueNumber: number, cwd: string, branch: string): void {
     } catch { /* non-fatal — best-effort */ }
 }
 
+function performAutoMerge(prUrl: string, defaultBranch: string, cwd: string): void {
+    try {
+        execSync(`gh pr merge "${prUrl}" --squash --delete-branch --yes`, { cwd, stdio: 'pipe' });
+        console.log(`  Auto-merged: ${prUrl}`);
+    } catch (e) {
+        console.warn(`  Warning: auto-merge failed — ${(e as Error).message}`);
+        return;
+    }
+    try {
+        execSync(`git checkout ${defaultBranch}`, { cwd, stdio: 'pipe' });
+        execSync(`git pull origin ${defaultBranch}`, { cwd, stdio: 'pipe' });
+        console.log(`  Pulled latest ${defaultBranch}`);
+    } catch (e) {
+        console.warn(`  Warning: could not pull latest ${defaultBranch} after merge — ${(e as Error).message}`);
+    }
+}
+
 const APPROVE_BODY_START = 'APPROVE-PR-BODY-START';
 const APPROVE_BODY_END = 'APPROVE-PR-BODY-END';
 
@@ -1346,7 +1370,7 @@ async function fixIssue(
     return { issueNumber, branch, prUrl, output, timedOut, maxTurnsReached, processError, usage, sessionStats, timer, approvalDeclined };
 }
 
-async function runWatch(intervalSeconds: number, timeoutMs: number, config: MouseFixesConfig = {}, skipChecks = false): Promise<void> {
+async function runWatch(intervalSeconds: number, timeoutMs: number, config: MouseFixesConfig = {}, skipChecks = false, autoMerge = false): Promise<void> {
     // Detect repo once up front
     let repo: string;
     try {
@@ -1357,6 +1381,7 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
         process.exit(1);
     }
 
+    const defaultBranch = config.defaultBaseBranch ?? detectDefaultBranch();
     console.log(`mouse-fixes watching for new issues (interval: ${intervalSeconds}s) — Ctrl-C to stop`);
 
     // Handle Ctrl-C gracefully
@@ -1389,24 +1414,38 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
         lastCheckedAt = new Date().toISOString();
 
         if (newCount > 0) {
-            // Run fixes concurrently when there are multiple new issues
-            await Promise.all(
-                newIssues.map(i => {
-                    const prefix = newCount > 1 ? `[#${i.number}] ` : '';
-                    return fixIssue(
+            const cwd = process.cwd();
+            if (autoMerge) {
+                // Sequential: each fix builds on the merged main
+                for (const i of newIssues) {
+                    const result = await fixIssue(
                         i.number, repo, timeoutMs,
-                        config.model,
-                        config.maxTurns ?? DEFAULT_MAX_TURNS,
-                        prefix,
-                        config.defaultBaseBranch,
-                        config.branchPrefix,
-                        skipChecks,
-                        false,
-                        undefined,
-                        config.maxCost,
+                        config.model, config.maxTurns ?? DEFAULT_MAX_TURNS,
+                        '', config.defaultBaseBranch, config.branchPrefix, skipChecks,
+                        false, undefined, config.maxCost,
                     );
-                })
-            );
+                    const success = !result.timedOut && !result.maxTurnsReached && !result.processError;
+                    if (success) {
+                        markIssueDone(result.issueNumber, cwd, result.branch);
+                        if (result.prUrl) {
+                            performAutoMerge(result.prUrl, defaultBranch, cwd);
+                        }
+                    }
+                }
+            } else {
+                // Concurrent (existing behavior)
+                await Promise.all(
+                    newIssues.map(i => {
+                        const prefix = newCount > 1 ? `[#${i.number}] ` : '';
+                        return fixIssue(
+                            i.number, repo, timeoutMs,
+                            config.model, config.maxTurns ?? DEFAULT_MAX_TURNS,
+                            prefix, config.defaultBaseBranch, config.branchPrefix, skipChecks,
+                            false, undefined, config.maxCost,
+                        );
+                    })
+                );
+            }
         }
 
         console.log(`  [${new Date().toLocaleTimeString()}]  checked — ${newCount} new issue(s)`);
@@ -1432,11 +1471,11 @@ async function main(): Promise<void> {
     }
 
     if (command.kind === 'watch') {
-        await runWatch(command.intervalSeconds, command.timeoutMs, config, command.skipChecks);
+        await runWatch(command.intervalSeconds, command.timeoutMs, config, command.skipChecks, command.autoMerge);
         return;
     }
 
-    const { issueNumbers, timeoutMs, model, maxTurns, skipChecks, dryRun, approve, maxCost } = command;
+    const { issueNumbers, timeoutMs, model, maxTurns, skipChecks, dryRun, approve, maxCost, autoMerge } = command;
 
     if (approve && issueNumbers.length > 1) {
         console.error('Error: --approve can only be used with a single issue number.');
@@ -1449,8 +1488,9 @@ async function main(): Promise<void> {
     const dryRunLabel = dryRun ? '  [DRY RUN]' : '';
     const approveLabel = approve ? `  [APPROVE: ${approve}]` : '';
     const maxCostLabel = maxCost !== undefined ? `  [MAX-COST: $${maxCost.toFixed(2)}]` : '';
+    const autoMergeLabel = autoMerge ? '  [AUTO-MERGE]' : '';
     const issueLabel = issueNumbers.map(n => `#${n}`).join(', ');
-    console.log(`\nmouse-fixes — issue${issueNumbers.length > 1 ? 's' : ''} ${issueLabel}${modelLabel}${dryRunLabel}${approveLabel}${maxCostLabel}\n`);
+    console.log(`\nmouse-fixes — issue${issueNumbers.length > 1 ? 's' : ''} ${issueLabel}${modelLabel}${dryRunLabel}${approveLabel}${maxCostLabel}${autoMergeLabel}\n`);
 
     // 1. Detect repo (once, shared across all issues)
     let repo: string;
@@ -1467,21 +1507,39 @@ async function main(): Promise<void> {
         console.log(`  Repo: ${repo}`);
     }
 
-    // 2. Run all issues concurrently
-    const results = await Promise.all(
-        issueNumbers.map(n => {
-            const prefix = issueNumbers.length > 1 ? `[#${n}] ` : '';
-            return fixIssue(
-                n, repo, timeoutMs, model, maxTurns, prefix,
-                config.defaultBaseBranch,
-                config.branchPrefix,
-                skipChecks,
-                dryRun,
-                approve,
-                maxCost,
+    // 2. Run issues — sequentially when --auto-merge so each fix builds on the merged main,
+    //    concurrently otherwise (existing behaviour).
+    const cwd = process.cwd();
+    const defaultBranch = config.defaultBaseBranch ?? detectDefaultBranch();
+    let results: Awaited<ReturnType<typeof fixIssue>>[];
+
+    if (autoMerge) {
+        results = [];
+        for (const n of issueNumbers) {
+            const result = await fixIssue(
+                n, repo, timeoutMs, model, maxTurns, '',
+                config.defaultBaseBranch, config.branchPrefix, skipChecks, dryRun, approve, maxCost,
             );
-        })
-    );
+            results.push(result);
+            const success = !result.timedOut && !result.maxTurnsReached && !result.processError && !result.approvalDeclined;
+            if (!dryRun && success) {
+                markIssueDone(result.issueNumber, cwd, result.branch);
+                if (result.prUrl) {
+                    performAutoMerge(result.prUrl, defaultBranch, cwd);
+                }
+            }
+        }
+    } else {
+        results = await Promise.all(
+            issueNumbers.map(n => {
+                const prefix = issueNumbers.length > 1 ? `[#${n}] ` : '';
+                return fixIssue(
+                    n, repo, timeoutMs, model, maxTurns, prefix,
+                    config.defaultBaseBranch, config.branchPrefix, skipChecks, dryRun, approve, maxCost,
+                );
+            })
+        );
+    }
 
     // 3. After all issues complete, print results and one stats table per issue
     for (const result of results) {
@@ -1494,8 +1552,9 @@ async function main(): Promise<void> {
         if (result.processError) {
             console.warn(`\n  Warning: Claude process encountered an error: ${result.processError.message}`);
         }
-        if (!dryRun && !result.approvalDeclined && !result.timedOut && !result.maxTurnsReached && !result.processError) {
-            markIssueDone(result.issueNumber, process.cwd(), result.branch);
+        // markIssueDone already called inline in the autoMerge sequential loop above
+        if (!autoMerge && !dryRun && !result.approvalDeclined && !result.timedOut && !result.maxTurnsReached && !result.processError) {
+            markIssueDone(result.issueNumber, cwd, result.branch);
         }
 
         // Print Claude's final output (should include the PR URL on the last line)
