@@ -10,6 +10,7 @@ import { detectRepo, slugify, getGitDiffStats, getChangedFiles, detectDefaultBra
 import { createState, updateState, readState, RunStage, RunState, FailureReason } from './state.js';
 import { spawnClaude, UsageStats, runPostMortem } from './runner.js';
 import { loadConfig, MouseFixesConfig, CONFIG_FILENAME } from './config.js';
+import { QualityMode, QualityResults, runQualityChecks, formatQualityLog } from './quality.js';
 
 const DEFAULT_TIMEOUT_S = 600; // 10 minutes
 const DEFAULT_MAX_TURNS = 50;
@@ -82,7 +83,7 @@ const DEFAULT_INTERVAL_S = 30;
 type ApproveCheckpoint = 'before-push' | 'before-pr';
 
 type Command =
-    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean; approve?: ApproveCheckpoint; maxCost?: number; autoMerge: boolean; worktree: boolean }
+    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean; approve?: ApproveCheckpoint; maxCost?: number; autoMerge: boolean; worktree: boolean; quality: QualityMode }
     | { kind: 'start'; timeoutMs: number }
     | { kind: 'watch'; intervalSeconds: number; timeoutMs: number; skipChecks: boolean; autoMerge: boolean }
     | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean };
@@ -114,12 +115,15 @@ Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id
   --max-cost <dollars> Skip PR if actual run cost exceeds this limit (e.g. 1.50)
   --auto-merge         After PR creation, merge the PR and pull main before the next issue
   --worktree           Run each issue in an isolated git worktree (keeps main tree clean)
+  --quality=strict     Run lint/typecheck/test/build before PR; abort on any failure
+  --quality=warn       Run checks before PR; report failures but still open PR (default)
+  --no-quality         Skip all quality checks
   --skip-checks        Bypass all pre-flight git safety checks (for CI or advanced users)
 
 Config file (${CONFIG_FILENAME}):
   Place a ${CONFIG_FILENAME} file in the repo root to set per-repo defaults.
   CLI flags always override config file values.
-  Supported keys: model, maxTurns, maxCost, defaultBaseBranch, branchPrefix, logDir, autoMerge, worktree
+  Supported keys: model, maxTurns, maxCost, defaultBaseBranch, branchPrefix, logDir, autoMerge, worktree, runQualityChecks, qualityMode
   Example:
     model: claude-sonnet-4-6
     maxTurns: 30
@@ -142,6 +146,8 @@ Examples:
   mouse-fixes 43 --model claude-sonnet-4-6
   mouse-fixes 42 --max-turns 30
   mouse-fixes 42 --max-cost 1.50
+  mouse-fixes 42 --quality=strict
+  mouse-fixes 42 --no-quality
   mouse-fixes next --max-cost 0.50
   mouse-fixes next
   mouse-fixes start
@@ -159,6 +165,21 @@ Run from inside the target git repository.
     const dryRun = args.includes('--dry-run');
     const autoMerge = args.includes('--auto-merge') || (config.autoMerge ?? false);
     const worktree = args.includes('--worktree') || (config.worktree ?? false);
+
+    let quality: QualityMode = config.quality ?? 'warn';
+    if (args.includes('--no-quality')) {
+        quality = 'off';
+    } else {
+        const qualIdx = args.findIndex(a => a.startsWith('--quality='));
+        if (qualIdx !== -1) {
+            const val = args[qualIdx].split('=')[1];
+            if (val !== 'strict' && val !== 'warn') {
+                console.error('Error: --quality value must be "strict" or "warn".');
+                process.exit(1);
+            }
+            quality = val as QualityMode;
+        }
+    }
 
     if (autoMerge && dryRun) {
         console.error('Error: --auto-merge and --dry-run cannot be used together.');
@@ -285,7 +306,7 @@ Run from inside the target git repository.
         issueNumbers = positional.map(arg => parseIssueNumber(arg));
     }
 
-    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks, dryRun, approve, maxCost, autoMerge, worktree };
+    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks, dryRun, approve, maxCost, autoMerge, worktree, quality };
 }
 
 function buildPrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, defaultBranch: string, branch: string): string {
@@ -1322,6 +1343,7 @@ async function fixIssue(
     approve?: ApproveCheckpoint,
     maxCost?: number,
     useWorktree = false,
+    quality: QualityMode = 'warn',
 ): Promise<{ issueNumber: number; branch: string; prUrl: string | null; output: string; timedOut: boolean; maxTurnsReached: boolean; processError?: Error; usage: UsageStats | null; sessionStats: SessionStats | null; timer: StepTimer; approvalDeclined: boolean }> {
     const timer = new StepTimer();
     const cwd = process.cwd();
@@ -1382,14 +1404,16 @@ async function fixIssue(
         }
     }
 
-    // When --max-cost is set (and not overridden by another gate), use before-pr style:
-    // Claude commits + pushes but does NOT open the PR, so the cost gate can intercept it.
+    // When --max-cost or --quality is set (and not overridden by another gate), use before-pr
+    // style: Claude commits + pushes but does NOT open the PR, so the gate can intercept it.
     const prGateActive = maxCost !== undefined && !dryRun && approve !== 'before-push';
+    const qualityGateActive = quality !== 'off' && !dryRun && approve !== 'before-push';
+    const anyGateActive = prGateActive || qualityGateActive;
     const prompt = dryRun
         ? buildDryRunPrompt(repo, issue, defaultBranch, branch)
         : approve === 'before-push'
         ? buildApproveBeforePushPrompt(repo, issue, defaultBranch, branch)
-        : (approve === 'before-pr' || prGateActive)
+        : (approve === 'before-pr' || anyGateActive)
         ? buildApproveBeforePrPrompt(repo, issue, defaultBranch, branch)
         : useWorktree
         ? buildWorktreePrompt(repo, issue, branch)
@@ -1407,14 +1431,22 @@ async function fixIssue(
         done(claudeResult.toolCallLog || undefined);
     }
 
-    // Remove the worktree now that Claude has finished. The branch and its commits
-    // remain in the shared git database and are accessible from the main working tree.
+    const { summary: output, timedOut, maxTurnsReached, processError, usage } = claudeResult;
+
+    // Run quality checks in effectiveCwd while the worktree is still present (worktree mode).
+    let qualityResults: QualityResults | null = null;
+    if (qualityGateActive && !timedOut && !maxTurnsReached && !processError) {
+        console.log('  Running quality checks…');
+        qualityResults = runQualityChecks(effectiveCwd);
+        console.log(`  ${qualityResults.summary}`);
+    }
+
+    // Remove the worktree now that Claude and quality checks have finished. The branch and its
+    // commits remain in the shared git database and are accessible from the main working tree.
     if (worktreePath) {
         removeWorktree(cwd, worktreePath);
         worktreePath = null;
     }
-
-    const { summary: output, timedOut, maxTurnsReached, processError, usage } = claudeResult;
 
     // 3. Collect git diff stats
     let sessionStats: SessionStats | null = null;
@@ -1436,7 +1468,7 @@ async function fixIssue(
     const prUrlMatch = [...trimmed.matchAll(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/g)].at(-1);
     let prUrl: string | null = prUrlMatch ? prUrlMatch[0] : null;
 
-    // Post-run gate: cost check and optional human approval
+    // Post-run gate: cost check, quality check, and optional human approval
     let approvalDeclined = false;
     if (!timedOut && !maxTurnsReached && !processError) {
         // Cost gate — checked before user prompt so an over-budget run skips approval too
@@ -1448,6 +1480,22 @@ async function fixIssue(
                 prUrl: null,
                 failureReason: 'costExceeded',
                 costUsd: usage.totalCostUsd,
+            });
+            return { issueNumber, branch, prUrl: null, output, timedOut, maxTurnsReached, processError, usage, sessionStats, timer, approvalDeclined: false };
+        }
+
+        // Quality gate — strict mode aborts PR creation on any check failure
+        if (qualityResults && qualityResults.anyFailed && quality === 'strict') {
+            const failed = qualityResults.checks.filter(c => !c.passed).map(c => c.name).join(', ');
+            console.warn(`\n  Quality checks failed (${failed}) — skipping PR creation (--quality=strict)`);
+            console.warn(`  Branch "${branch}" left intact for inspection.`);
+            const qualityLog = formatQualityLog(qualityResults);
+            tryUpdateState(cwd, issueNumber, 'failed', {
+                filesChanged: getChangedFiles(cwd, branch, defaultBranch),
+                prUrl: null,
+                failureReason: 'qualityFailed',
+                costUsd: usage?.totalCostUsd ?? null,
+                outputLog: [claudeResult.toolCallLog, qualityLog].filter(Boolean).join('\n\n--- Quality Checks ---\n') || null,
             });
             return { issueNumber, branch, prUrl: null, output, timedOut, maxTurnsReached, processError, usage, sessionStats, timer, approvalDeclined: false };
         }
@@ -1475,8 +1523,8 @@ async function fixIssue(
                 prUrl = newPrUrl;
                 console.log(`\n  ${newPrUrl}\n`);
             }
-        } else if (prGateActive) {
-            // Cost gate passed — auto-create PR
+        } else if (anyGateActive) {
+            // Cost gate passed + quality checks done — auto-create PR
             const prBody = extractPrBody(output, issueNumber, issue.title);
             const newPrUrl = performPrOnly(branch, prBody, issueNumber, issue.title, cwd);
             if (newPrUrl) {
@@ -1495,6 +1543,10 @@ async function fixIssue(
         : processError ? 'error'
         : null;
 
+    const qualityLog = qualityResults ? formatQualityLog(qualityResults) : null;
+    const combinedLog = [claudeResult.toolCallLog, qualityLog ? `--- Quality Checks ---\n${qualityLog}` : '']
+        .filter(Boolean).join('\n\n') || null;
+
     if (finalStage === 'failed') {
         // Persist failure metadata and the captured output log for inspection / post-mortem
         tryUpdateState(cwd, issueNumber, finalStage, {
@@ -1502,7 +1554,7 @@ async function fixIssue(
             prUrl,
             failureReason,
             costUsd: usage?.totalCostUsd ?? null,
-            outputLog: claudeResult.toolCallLog || null,
+            outputLog: combinedLog,
         });
 
         // Post-mortem: a short, cheap Claude call to diagnose the failure (non-fatal)
@@ -1580,7 +1632,7 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
                         i.number, repo, timeoutMs,
                         config.model, config.maxTurns ?? DEFAULT_MAX_TURNS,
                         '', config.defaultBaseBranch, config.branchPrefix, skipChecks,
-                        false, undefined, config.maxCost, config.worktree ?? false,
+                        false, undefined, config.maxCost, config.worktree ?? false, config.quality ?? 'warn',
                     );
                     const success = !result.timedOut && !result.maxTurnsReached && !result.processError;
                     if (success) {
@@ -1599,7 +1651,7 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
                             i.number, repo, timeoutMs,
                             config.model, config.maxTurns ?? DEFAULT_MAX_TURNS,
                             prefix, config.defaultBaseBranch, config.branchPrefix, skipChecks,
-                            false, undefined, config.maxCost, config.worktree ?? false,
+                            false, undefined, config.maxCost, config.worktree ?? false, config.quality ?? 'warn',
                         );
                     })
                 );
@@ -1633,7 +1685,7 @@ async function main(): Promise<void> {
         return;
     }
 
-    const { issueNumbers, timeoutMs, model, maxTurns, skipChecks, dryRun, approve, maxCost, autoMerge, worktree } = command;
+    const { issueNumbers, timeoutMs, model, maxTurns, skipChecks, dryRun, approve, maxCost, autoMerge, worktree, quality } = command;
 
     if (approve && issueNumbers.length > 1) {
         console.error('Error: --approve can only be used with a single issue number.');
@@ -1648,8 +1700,9 @@ async function main(): Promise<void> {
     const maxCostLabel = maxCost !== undefined ? `  [MAX-COST: $${maxCost.toFixed(2)}]` : '';
     const autoMergeLabel = autoMerge ? '  [AUTO-MERGE]' : '';
     const worktreeLabel = worktree ? '  [WORKTREE]' : '';
+    const qualityLabel = quality === 'off' ? '  [NO-QUALITY]' : quality === 'strict' ? '  [QUALITY: strict]' : '';
     const issueLabel = issueNumbers.map(n => `#${n}`).join(', ');
-    console.log(`\nmouse-fixes — issue${issueNumbers.length > 1 ? 's' : ''} ${issueLabel}${modelLabel}${dryRunLabel}${approveLabel}${maxCostLabel}${autoMergeLabel}${worktreeLabel}\n`);
+    console.log(`\nmouse-fixes — issue${issueNumbers.length > 1 ? 's' : ''} ${issueLabel}${modelLabel}${dryRunLabel}${approveLabel}${maxCostLabel}${autoMergeLabel}${worktreeLabel}${qualityLabel}\n`);
 
     // 1. Detect repo (once, shared across all issues)
     let repo: string;
@@ -1677,7 +1730,7 @@ async function main(): Promise<void> {
         for (const n of issueNumbers) {
             const result = await fixIssue(
                 n, repo, timeoutMs, model, maxTurns, '',
-                config.defaultBaseBranch, config.branchPrefix, skipChecks, dryRun, approve, maxCost, worktree,
+                config.defaultBaseBranch, config.branchPrefix, skipChecks, dryRun, approve, maxCost, worktree, quality,
             );
             results.push(result);
             const success = !result.timedOut && !result.maxTurnsReached && !result.processError && !result.approvalDeclined;
@@ -1694,7 +1747,7 @@ async function main(): Promise<void> {
                 const prefix = issueNumbers.length > 1 ? `[#${n}] ` : '';
                 return fixIssue(
                     n, repo, timeoutMs, model, maxTurns, prefix,
-                    config.defaultBaseBranch, config.branchPrefix, skipChecks, dryRun, approve, maxCost, worktree,
+                    config.defaultBaseBranch, config.branchPrefix, skipChecks, dryRun, approve, maxCost, worktree, quality,
                 );
             })
         );

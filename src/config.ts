@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { QualityMode } from './quality.js';
 
 export interface MouseFixesConfig {
     model?: string;
@@ -10,6 +11,7 @@ export interface MouseFixesConfig {
     logDir?: string;
     autoMerge?: boolean;
     worktree?: boolean;
+    quality?: QualityMode;
 }
 
 export const CONFIG_FILENAME = '.mouse-fixes.yml';
@@ -162,6 +164,19 @@ export function loadConfig(cwd: string = process.cwd()): MouseFixesConfig {
             process.exit(1);
         }
         config.worktree = raw.worktree === 'true';
+    }
+
+    // runQualityChecks: false → quality: 'off'; qualityMode: strict|warn → quality value
+    if (raw.runQualityChecks === 'false') {
+        config.quality = 'off';
+    } else if (raw.qualityMode !== undefined && raw.qualityMode !== '') {
+        if (raw.qualityMode !== 'strict' && raw.qualityMode !== 'warn') {
+            console.error(
+                `Error: ${CONFIG_FILENAME}: "qualityMode" must be "strict" or "warn", got: "${raw.qualityMode}"`
+            );
+            process.exit(1);
+        }
+        config.quality = raw.qualityMode as QualityMode;
     }
 
     return config;
