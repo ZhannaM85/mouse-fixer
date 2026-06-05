@@ -1063,10 +1063,10 @@ async function performAutoMerge(prUrl: string, defaultBranch: string, cwd: strin
     //   (no --yes) works on older gh when stdin is non-TTY
     let merged = false;
     const immediateCmds = [
-        `gh pr merge ${prNumber} --squash --delete-branch --yes`,
-        `gh pr merge ${prNumber} --squash --delete-branch`,
-        `gh pr merge "${prUrl}" --squash --delete-branch --yes`,
-        `gh pr merge "${prUrl}" --squash --delete-branch`,
+        `gh pr merge ${prNumber} --merge --delete-branch --yes`,
+        `gh pr merge ${prNumber} --merge --delete-branch`,
+        `gh pr merge "${prUrl}" --merge --delete-branch --yes`,
+        `gh pr merge "${prUrl}" --merge --delete-branch`,
     ];
     let lastError = '';
     for (const cmd of immediateCmds) {
@@ -1085,7 +1085,7 @@ async function performAutoMerge(prUrl: string, defaultBranch: string, cwd: strin
         // Immediate merge failed — try enabling GitHub auto-merge (waits for CI).
         let waitForChecks = false;
         try {
-            execSync(`gh pr merge ${prNumber} --squash --delete-branch --auto`, { cwd, stdio: 'pipe', timeout: 30_000 });
+            execSync(`gh pr merge ${prNumber} --merge --delete-branch --auto`, { cwd, stdio: 'pipe', timeout: 30_000 });
             waitForChecks = true;
             console.log(`  GitHub auto-merge enabled — waiting for CI checks to pass...`);
         } catch {
