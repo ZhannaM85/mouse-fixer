@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, existsSync, readdirSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, unlinkSync, mkdirSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -713,6 +713,23 @@ function escapeRegex(s: string): string {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function makeRunTimestamp(): string {
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+function writeRunLog(logDir: string, timestamp: string, issueNumber: number, content: string): void {
+    try {
+        mkdirSync(logDir, { recursive: true });
+        const filename = join(logDir, `${timestamp}-issue${issueNumber}.md`);
+        writeFileSync(filename, content, 'utf8');
+        console.log(`  Log: ${filename}`);
+    } catch (e) {
+        console.warn(`  Warning: could not write run log — ${(e as Error).message}`);
+    }
+}
+
 async function runResume(
     issueNumber: number | null,
     timeoutMs: number,
@@ -920,7 +937,14 @@ async function runResume(
         console.log(`\n${output}\n`);
     }
 
-    timer.report(sessionStats ?? undefined);
+    const reportText = timer.render(sessionStats ?? undefined);
+    console.log('\n' + reportText);
+
+    const resumeLogDir = join(cwd, config.logDir ?? 'logs');
+    const resumeLogParts: string[] = [];
+    if (output && output !== '(no summary)') resumeLogParts.push(output.trim());
+    resumeLogParts.push(reportText);
+    writeRunLog(resumeLogDir, makeRunTimestamp(), session.issueNumber, resumeLogParts.join('\n\n') + '\n');
 }
 
 async function runStart(timeoutMs: number): Promise<void> {
@@ -1625,6 +1649,8 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
 
         if (newCount > 0) {
             const cwd = process.cwd();
+            const watchTimestamp = makeRunTimestamp();
+            const watchLogDir = join(cwd, config.logDir ?? 'logs');
             if (autoMerge) {
                 // Sequential: each fix builds on the merged main
                 for (const i of newIssues) {
@@ -1641,10 +1667,15 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
                             await performAutoMerge(result.prUrl, defaultBranch, cwd);
                         }
                     }
+                    const watchReportText = result.timer.render(result.sessionStats ?? undefined);
+                    const watchLogParts: string[] = [];
+                    if (result.output && result.output !== '(no summary)') watchLogParts.push(result.output.trim());
+                    watchLogParts.push(watchReportText);
+                    writeRunLog(watchLogDir, watchTimestamp, result.issueNumber, watchLogParts.join('\n\n') + '\n');
                 }
             } else {
                 // Concurrent (existing behavior)
-                await Promise.all(
+                const watchResults = await Promise.all(
                     newIssues.map(i => {
                         const prefix = newCount > 1 ? `[#${i.number}] ` : '';
                         return fixIssue(
@@ -1655,6 +1686,13 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
                         );
                     })
                 );
+                for (const result of watchResults) {
+                    const watchReportText = result.timer.render(result.sessionStats ?? undefined);
+                    const watchLogParts: string[] = [];
+                    if (result.output && result.output !== '(no summary)') watchLogParts.push(result.output.trim());
+                    watchLogParts.push(watchReportText);
+                    writeRunLog(watchLogDir, watchTimestamp, result.issueNumber, watchLogParts.join('\n\n') + '\n');
+                }
             }
         }
 
@@ -1669,6 +1707,7 @@ async function main(): Promise<void> {
     // Load .mouse-fixes.yml from the repo root (silently ignored if missing)
     const config = loadConfig();
     const command = parseArgs(config);
+    const runTimestamp = makeRunTimestamp();
 
     if (command.kind === 'start') {
         await runStart(command.timeoutMs);
@@ -1778,7 +1817,14 @@ async function main(): Promise<void> {
             console.log(`  Dry-run complete. Review changes with: git diff ${result.branch}\n`);
         }
 
-        result.timer.report(result.sessionStats ?? undefined);
+        const reportText = result.timer.render(result.sessionStats ?? undefined);
+        console.log('\n' + reportText);
+
+        const logDir = join(cwd, config.logDir ?? 'logs');
+        const logParts: string[] = [];
+        if (result.output && result.output !== '(no summary)') logParts.push(result.output.trim());
+        logParts.push(reportText);
+        writeRunLog(logDir, runTimestamp, result.issueNumber, logParts.join('\n\n') + '\n');
     }
 }
 
