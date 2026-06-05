@@ -4,3 +4,4 @@ dist/
 .claude/
 tmp/
 .mouse-fixes/
+logs/
