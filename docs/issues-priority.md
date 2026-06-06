@@ -61,7 +61,7 @@ _Enables autonomous polling: mouse-fixes runs continuously and picks up new issu
 |---|-------|-------|
 | ~~[#43](https://github.com/ZhannaM85/mouse-fixes/issues/43)~~ | ~~feat: write run output to a per-run log file in logs/~~ | ~~Do first — makes autonomous/remote runs observable~~ |
 | ~~[#16](https://github.com/ZhannaM85/mouse-fixes/issues/16)~~ | ~~feat: `--watch` flag with polling loop~~ | ~~Core of watch mode~~ |
-| [#17](https://github.com/ZhannaM85/mouse-fixes/issues/17) | feat: persist processed issue IDs to avoid re-processing | Depends on #16 |
+| ~~[#17](https://github.com/ZhannaM85/mouse-fixes/issues/17)~~ | ~~feat: persist processed issue IDs to avoid re-processing~~ | ~~Depends on #16~~ |
 | [#65](https://github.com/ZhannaM85/mouse-fixes/issues/65) | fix: `--watch` spawns unlimited concurrent Claude processes | Add concurrency cap (default 3); configurable via `.mouse-fixes.yml` |
 | [#18](https://github.com/ZhannaM85/mouse-fixes/issues/18) | feat: `--label` filter for `--watch` mode | Depends on #16 |
 
