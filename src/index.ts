@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue, fetchAllIssues, Issue } from './github.js';
 import { detectRepo, slugify, getGitDiffStats, getChangedFiles, detectDefaultBranch, runPreflightChecks, createWorktree, removeWorktree } from './git.js';
-import { createState, updateState, readState, RunStage, RunState, FailureReason } from './state.js';
+import { createState, updateState, readState, loadState, saveState, RunStage, RunState, FailureReason } from './state.js';
 import { spawnClaude, UsageStats, runPostMortem } from './runner.js';
 import { loadConfig, MouseFixesConfig, CONFIG_FILENAME } from './config.js';
 import { QualityMode, QualityResults, runQualityChecks, formatQualityLog } from './quality.js';
@@ -1624,6 +1624,8 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
         process.exit(0);
     });
 
+    const cwd = process.cwd();
+    const watchState = loadState(cwd);
     let lastCheckedAt = new Date().toISOString();
 
     // eslint-disable-next-line no-constant-condition
@@ -1648,12 +1650,12 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
         lastCheckedAt = new Date().toISOString();
 
         if (newCount > 0) {
-            const cwd = process.cwd();
             const watchTimestamp = makeRunTimestamp();
             const watchLogDir = join(cwd, config.logDir ?? 'logs');
             if (autoMerge) {
                 // Sequential: each fix builds on the merged main
                 for (const i of newIssues) {
+                    if (watchState.processedIssueIds.includes(i.number)) continue;
                     const result = await fixIssue(
                         i.number, repo, timeoutMs,
                         config.model, config.maxTurns ?? DEFAULT_MAX_TURNS,
@@ -1666,6 +1668,8 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
                         if (result.prUrl) {
                             await performAutoMerge(result.prUrl, defaultBranch, cwd);
                         }
+                        watchState.processedIssueIds.push(i.number);
+                        saveState(cwd, watchState);
                     }
                     const watchReportText = result.timer.render(result.sessionStats ?? undefined);
                     const watchLogParts: string[] = [];
@@ -1675,9 +1679,10 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
                 }
             } else {
                 // Concurrent (existing behavior)
+                const unprocessedIssues = newIssues.filter(i => !watchState.processedIssueIds.includes(i.number));
                 const watchResults = await Promise.all(
-                    newIssues.map(i => {
-                        const prefix = newCount > 1 ? `[#${i.number}] ` : '';
+                    unprocessedIssues.map(i => {
+                        const prefix = unprocessedIssues.length > 1 ? `[#${i.number}] ` : '';
                         return fixIssue(
                             i.number, repo, timeoutMs,
                             config.model, config.maxTurns ?? DEFAULT_MAX_TURNS,
@@ -1687,6 +1692,11 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
                     })
                 );
                 for (const result of watchResults) {
+                    const success = !result.timedOut && !result.maxTurnsReached && !result.processError;
+                    if (success) {
+                        watchState.processedIssueIds.push(result.issueNumber);
+                        saveState(cwd, watchState);
+                    }
                     const watchReportText = result.timer.render(result.sessionStats ?? undefined);
                     const watchLogParts: string[] = [];
                     if (result.output && result.output !== '(no summary)') watchLogParts.push(result.output.trim());

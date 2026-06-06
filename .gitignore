@@ -4,4 +4,5 @@ dist/
 .claude/
 tmp/
 .mouse-fixes/
+.mouse-fixes-state.json
 logs/
