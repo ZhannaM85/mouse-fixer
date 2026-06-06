@@ -131,3 +131,30 @@ export function deleteState(cwd: string, issueNumber: number): void {
         unlinkSync(path);
     }
 }
+
+export interface WatchState {
+    processedIssueIds: number[];
+}
+
+const WATCH_STATE_FILENAME = '.mouse-fixes-state.json';
+
+/**
+ * Load the watch-mode persistence file from cwd.
+ * Returns an empty state if the file doesn't exist or can't be parsed.
+ */
+export function loadState(cwd: string): WatchState {
+    const filePath = join(cwd, WATCH_STATE_FILENAME);
+    if (!existsSync(filePath)) return { processedIssueIds: [] };
+    try {
+        return JSON.parse(readFileSync(filePath, 'utf8')) as WatchState;
+    } catch {
+        return { processedIssueIds: [] };
+    }
+}
+
+/**
+ * Persist the watch-mode state (processed issue IDs) to cwd.
+ */
+export function saveState(cwd: string, state: WatchState): void {
+    writeFileSync(join(cwd, WATCH_STATE_FILENAME), JSON.stringify(state, null, 2) + '\n', 'utf8');
+}
