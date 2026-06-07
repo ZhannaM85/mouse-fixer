@@ -85,7 +85,7 @@ type ApproveCheckpoint = 'before-push' | 'before-pr';
 type Command =
     | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean; approve?: ApproveCheckpoint; maxCost?: number; autoMerge: boolean; worktree: boolean; quality: QualityMode }
     | { kind: 'start'; timeoutMs: number }
-    | { kind: 'watch'; intervalSeconds: number; timeoutMs: number; skipChecks: boolean; autoMerge: boolean }
+    | { kind: 'watch'; intervalSeconds: number; timeoutMs: number; skipChecks: boolean; autoMerge: boolean; label?: string }
     | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean };
 
 function parseArgs(config: MouseFixesConfig = {}): Command {
@@ -97,7 +97,7 @@ Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id
        mouse-fixes next   [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
        mouse-fixes start  [--timeout <seconds>]
        mouse-fixes resume [<issue>] [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
-       mouse-fixes --watch [--interval <seconds>] [--timeout <seconds>]
+       mouse-fixes --watch [--interval <seconds>] [--label <name>] [--timeout <seconds>]
 
   <issue>              One or more issue numbers or GitHub issue URLs (required)
   next                 Auto-pick the next open issue from docs/issues-priority.md
@@ -106,6 +106,7 @@ Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id
                        Detects branches with no open PR and re-runs Claude on the existing branch.
   --watch              Poll for new issues and fix them automatically
   --interval <seconds> Polling interval for --watch (default: ${DEFAULT_INTERVAL_S})
+  --label <name>       Only watch issues with this label (--watch mode only)
   --timeout <seconds>  Max Claude runtime per issue in seconds (default: ${DEFAULT_TIMEOUT_S})
   --model <model-id>   Claude model to use (e.g. claude-haiku-4-5-20251001, claude-sonnet-4-6)
                        If omitted, the claude CLI uses its own default
@@ -155,6 +156,8 @@ Examples:
   mouse-fixes resume 42
   mouse-fixes --watch
   mouse-fixes --watch --interval 60
+  mouse-fixes --watch --label autofix
+  mouse-fixes --watch --label bug --interval 60
 
 Run from inside the target git repository.
         `.trim());
@@ -267,7 +270,17 @@ Run from inside the target git repository.
             }
             intervalSeconds = val;
         }
-        return { kind: 'watch', intervalSeconds, timeoutMs: timeoutS * 1000, skipChecks, autoMerge };
+        let label: string | undefined;
+        const lIdx = args.indexOf('--label');
+        if (lIdx !== -1) {
+            const val = args[lIdx + 1];
+            if (!val || val.startsWith('--')) {
+                console.error('Error: --label requires a label name argument.');
+                process.exit(1);
+            }
+            label = val;
+        }
+        return { kind: 'watch', intervalSeconds, timeoutMs: timeoutS * 1000, skipChecks, autoMerge, label };
     }
 
     // Identify indices consumed by flags so we can exclude them from positional args
@@ -1604,7 +1617,7 @@ async function fixIssue(
     return { issueNumber, branch, prUrl, output, timedOut, maxTurnsReached, processError, usage, sessionStats, timer, approvalDeclined };
 }
 
-async function runWatch(intervalSeconds: number, timeoutMs: number, config: MouseFixesConfig = {}, skipChecks = false, autoMerge = false): Promise<void> {
+async function runWatch(intervalSeconds: number, timeoutMs: number, config: MouseFixesConfig = {}, skipChecks = false, autoMerge = false, label?: string): Promise<void> {
     // Detect repo once up front
     let repo: string;
     try {
@@ -1633,10 +1646,9 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
         // Poll for open issues with creation timestamps
         let issueData: Array<{ number: number; createdAt: string }> = [];
         try {
-            const raw = execSync(
-                `gh issue list --repo ${repo} --state open --json number,createdAt --limit 50`,
-                { encoding: 'utf8' }
-            ).trim();
+            const labelFlag = label ? `--label ${label}` : '';
+            const cmd = `gh issue list --repo ${repo} --state open --json number,createdAt --limit 50 ${labelFlag}`.trim();
+            const raw = execSync(cmd, { encoding: 'utf8' }).trim();
             issueData = JSON.parse(raw);
         } catch (e) {
             console.error(`  Error fetching issues: ${(e as Error).message}`);
@@ -1736,7 +1748,7 @@ async function main(): Promise<void> {
     }
 
     if (command.kind === 'watch') {
-        await runWatch(command.intervalSeconds, command.timeoutMs, config, command.skipChecks, command.autoMerge);
+        await runWatch(command.intervalSeconds, command.timeoutMs, config, command.skipChecks, command.autoMerge, command.label);
         return;
     }
 
