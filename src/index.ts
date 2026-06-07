@@ -123,7 +123,7 @@ Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id
 Config file (${CONFIG_FILENAME}):
   Place a ${CONFIG_FILENAME} file in the repo root to set per-repo defaults.
   CLI flags always override config file values.
-  Supported keys: model, maxTurns, maxCost, defaultBaseBranch, branchPrefix, logDir, autoMerge, worktree, runQualityChecks, qualityMode
+  Supported keys: model, maxTurns, maxCost, maxConcurrent, defaultBaseBranch, branchPrefix, logDir, autoMerge, worktree, runQualityChecks, qualityMode
   Example:
     model: claude-sonnet-4-6
     maxTurns: 30
@@ -1678,19 +1678,25 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
                     writeRunLog(watchLogDir, watchTimestamp, result.issueNumber, watchLogParts.join('\n\n') + '\n');
                 }
             } else {
-                // Concurrent (existing behavior)
+                // Concurrent with concurrency cap
+                const maxConcurrent = config.maxConcurrent ?? 3;
                 const unprocessedIssues = newIssues.filter(i => !watchState.processedIssueIds.includes(i.number));
-                const watchResults = await Promise.all(
-                    unprocessedIssues.map(i => {
-                        const prefix = unprocessedIssues.length > 1 ? `[#${i.number}] ` : '';
-                        return fixIssue(
-                            i.number, repo, timeoutMs,
-                            config.model, config.maxTurns ?? DEFAULT_MAX_TURNS,
-                            prefix, config.defaultBaseBranch, config.branchPrefix, skipChecks,
-                            false, undefined, config.maxCost, config.worktree ?? false, config.quality ?? 'warn',
-                        );
-                    })
-                );
+                const watchResults: Awaited<ReturnType<typeof fixIssue>>[] = [];
+                for (let bi = 0; bi < unprocessedIssues.length; bi += maxConcurrent) {
+                    const batch = unprocessedIssues.slice(bi, bi + maxConcurrent);
+                    const batchResults = await Promise.all(
+                        batch.map(i => {
+                            const prefix = unprocessedIssues.length > 1 ? `[#${i.number}] ` : '';
+                            return fixIssue(
+                                i.number, repo, timeoutMs,
+                                config.model, config.maxTurns ?? DEFAULT_MAX_TURNS,
+                                prefix, config.defaultBaseBranch, config.branchPrefix, skipChecks,
+                                false, undefined, config.maxCost, config.worktree ?? false, config.quality ?? 'warn',
+                            );
+                        })
+                    );
+                    watchResults.push(...batchResults);
+                }
                 for (const result of watchResults) {
                     const success = !result.timedOut && !result.maxTurnsReached && !result.processError;
                     if (success) {

@@ -6,6 +6,7 @@ export interface MouseFixesConfig {
     model?: string;
     maxTurns?: number;
     maxCost?: number;
+    maxConcurrent?: number;
     defaultBaseBranch?: string;
     branchPrefix?: string;
     logDir?: string;
@@ -32,6 +33,7 @@ const KNOWN_KEYS = new Set([
     // Future keys (owned by their respective feature issues)
     'autoPush',
     'maxCost',
+    'maxConcurrent',
     'runQualityChecks',
     'qualityMode',
     'ignoredPaths',
@@ -140,6 +142,17 @@ export function loadConfig(cwd: string = process.cwd()): MouseFixesConfig {
             process.exit(1);
         }
         config.maxCost = n;
+    }
+
+    if (raw.maxConcurrent !== undefined && raw.maxConcurrent !== '') {
+        const n = parseInt(raw.maxConcurrent, 10);
+        if (isNaN(n) || n <= 0) {
+            console.error(
+                `Error: ${CONFIG_FILENAME}: "maxConcurrent" must be a positive integer, got: "${raw.maxConcurrent}"`
+            );
+            process.exit(1);
+        }
+        config.maxConcurrent = n;
     }
 
     if (raw.logDir) {
