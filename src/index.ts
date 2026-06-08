@@ -345,7 +345,9 @@ Instructions:
    Follow the existing code style and patterns in this repository.
 
 3. AFTER all code changes are done — run the full git workflow:
-   a. Stage only the files you changed (list them explicitly, do not use git add -A):
+   a. Check for any files you created or modified that aren't yet staged:
+      git status --short
+      Stage all of them (list every file explicitly, do not use git add -A):
       git add <file1> <file2> ...
    b. Commit:
       git commit -m "Fix #${issue.number}: ${issue.title}"
@@ -495,7 +497,9 @@ Instructions:
    Follow the existing code style and patterns in this repository.
 
 4. AFTER all code changes are done — run the full git workflow:
-   a. Stage only the files you changed (list them explicitly, do not use git add -A):
+   a. Check for any files you created or modified that aren't yet staged:
+      git status --short
+      Stage all of them (list every file explicitly, do not use git add -A):
       git add <file1> <file2> ...
    b. Commit:
       git commit -m "Fix #${issue.number}: ${issue.title}"
@@ -1115,7 +1119,10 @@ Instructions:
    Follow the existing code style and patterns in this repository.
 
 3. Stage and commit your changes:
-   a. git add <file1> <file2> ...
+   a. Check for any files you created or modified that aren't yet staged:
+      git status --short
+      Stage all of them (list every file explicitly, do not use git add -A):
+      git add <file1> <file2> ...
    b. git commit -m "Fix #${issue.number}: ${issue.title}"
 
 4. DO NOT run git push or gh pr create.
@@ -1170,7 +1177,10 @@ Instructions:
    Follow the existing code style and patterns in this repository.
 
 3. Stage and commit your changes:
-   a. git add <file1> <file2> ...
+   a. Check for any files you created or modified that aren't yet staged:
+      git status --short
+      Stage all of them (list every file explicitly, do not use git add -A):
+      git add <file1> <file2> ...
    b. git commit -m "Fix #${issue.number}: ${issue.title}"
 
 4. Push the branch:
