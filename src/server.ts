@@ -11,7 +11,7 @@ const DEFAULT_TIMEOUT_MS = 600_000;
 export function startServer(port: number, cwd: string): void {
     const server = http.createServer((req, res) => {
         const url = req.url;
-        if (req.method !== 'POST' || (url !== '/webhook' && url !== '/slack')) {
+        if (req.method !== 'POST' || (url !== '/webhook' && url !== '/slack' && url !== '/telegram')) {
             res.writeHead(404);
             res.end();
             return;
@@ -23,8 +23,10 @@ export function startServer(port: number, cwd: string): void {
             console.log(`[server] ${req.method} ${url}`);
             if (url === '/webhook') {
                 void handleWebhook(body, cwd, res);
-            } else {
+            } else if (url === '/slack') {
                 void handleSlack(body, req.headers, cwd, res);
+            } else {
+                void handleTelegram(body, cwd, res);
             }
         });
     });
@@ -206,5 +208,110 @@ async function postToSlack(responseUrl: string, text: string): Promise<void> {
         });
     } catch (e) {
         console.error(`[slack] Failed to POST to response_url: ${(e as Error).message}`);
+    }
+}
+
+type TelegramPayload = {
+    message?: {
+        chat?: { id?: unknown };
+        text?: unknown;
+        from?: { username?: unknown };
+    };
+};
+
+async function handleTelegram(body: string, cwd: string, res: http.ServerResponse): Promise<void> {
+    let payload: TelegramPayload;
+    try {
+        payload = JSON.parse(body) as TelegramPayload;
+    } catch {
+        res.writeHead(200);
+        res.end();
+        return;
+    }
+
+    const text = payload.message?.text;
+    const chatId = payload.message?.chat?.id;
+
+    if (typeof text !== 'string' || !text.startsWith('/fix') || typeof chatId !== 'number') {
+        res.writeHead(200);
+        res.end();
+        return;
+    }
+
+    const parts = text.trim().split(/\s+/);
+    const issueNumber = parseInt(parts[1] ?? '', 10);
+    if (isNaN(issueNumber) || issueNumber <= 0) {
+        res.writeHead(200);
+        res.end();
+        return;
+    }
+
+    res.writeHead(200);
+    res.end();
+
+    await sendTelegramMessage(chatId, `Working on issue #${issueNumber} — I'll post the PR link here when it's ready.`);
+    void runTelegramFix(issueNumber, chatId, cwd);
+}
+
+async function runTelegramFix(issueNumber: number, chatId: number, cwd: string): Promise<void> {
+    let repo: string;
+    try {
+        const remote = execSync('git remote get-url origin', { cwd, encoding: 'utf8' }).trim();
+        const match = remote.match(/[:/]([^/]+\/[^/]+?)(?:\.git)?$/);
+        if (!match) throw new Error(`Cannot parse owner/repo from remote: ${remote}`);
+        repo = match[1];
+    } catch (e) {
+        await sendTelegramMessage(chatId, `Error: could not detect repository — ${(e as Error).message}`);
+        return;
+    }
+
+    let issue: Awaited<ReturnType<typeof fetchIssue>>;
+    try {
+        issue = fetchIssue(repo, issueNumber);
+    } catch (e) {
+        await sendTelegramMessage(chatId, `Error fetching issue #${issueNumber}: ${(e as Error).message}`);
+        return;
+    }
+
+    let defaultBranch = 'main';
+    try {
+        const ref = execSync('git symbolic-ref refs/remotes/origin/HEAD', { cwd, encoding: 'utf8' }).trim();
+        defaultBranch = ref.replace('refs/remotes/origin/', '');
+    } catch { /* fallback to main */ }
+
+    const branch = `fix/${issue.number}-${slugify(issue.title)}`;
+    const prompt = buildPrompt(repo, issue, defaultBranch, branch);
+
+    let result: Awaited<ReturnType<typeof spawnClaude>>;
+    try {
+        result = await spawnClaude(prompt, cwd, DEFAULT_TIMEOUT_MS);
+    } catch (e) {
+        await sendTelegramMessage(chatId, `Error: Claude run failed — ${(e as Error).message}`);
+        return;
+    }
+
+    const lines = result.summary.trim().split('\n');
+    const prUrl = lines.at(-1) ?? '';
+    if (prUrl.startsWith('https://github.com/')) {
+        await sendTelegramMessage(chatId, `PR ready: ${prUrl}`);
+    } else {
+        await sendTelegramMessage(chatId, `Error: Claude did not return a valid PR URL`);
+    }
+}
+
+async function sendTelegramMessage(chatId: number, text: string): Promise<void> {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) {
+        console.error('[telegram] TELEGRAM_BOT_TOKEN not configured');
+        return;
+    }
+    try {
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text }),
+        });
+    } catch (e) {
+        console.error(`[telegram] Failed to send message: ${(e as Error).message}`);
     }
 }
