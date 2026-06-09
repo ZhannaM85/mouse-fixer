@@ -9,7 +9,7 @@ in the loop.
 Lightweight CLI that takes a GitHub issue number, asks Claude Code to fix it **and** run the full git workflow (branch → commit → push → PR) — all autonomously, from your terminal.
 
 ## How it works
-
+(https://www.linkedin.com/pulse/i-built-claude-agent-turns-github-issues-pull-heres-myshkovskaya-fbr3f/)
 1. **Read issue** — fetches title, body, and labels from GitHub
 2. **Fix code** — Claude reads the relevant files and implements a minimal fix
 3. **Create branch** — `fix/{number}-{slug}` branched from master
