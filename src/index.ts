@@ -12,8 +12,10 @@ import { spawnClaude, UsageStats, runPostMortem } from './runner.js';
 import { loadConfig, MouseFixesConfig, CONFIG_FILENAME } from './config.js';
 import { QualityMode, QualityResults, runQualityChecks, formatQualityLog } from './quality.js';
 import { buildPrompt } from './prompt.js';
+import { startServer } from './server.js';
 
 const DEFAULT_TIMEOUT_S = 600; // 10 minutes
+const DEFAULT_PORT = 3000;
 const DEFAULT_MAX_TURNS = 50;
 
 function parseIssueNumber(raw: string): number {
@@ -87,20 +89,33 @@ type Command =
     | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean; approve?: ApproveCheckpoint; maxCost?: number; autoMerge: boolean; worktree: boolean; quality: QualityMode }
     | { kind: 'start'; timeoutMs: number }
     | { kind: 'watch'; intervalSeconds: number; timeoutMs: number; skipChecks: boolean; autoMerge: boolean; label?: string }
-    | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean };
+    | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean }
+    | { kind: 'serve'; port: number };
 
 function parseArgs(config: MouseFixesConfig = {}): Command {
     const args = process.argv.slice(2);
 
     if (args.includes('--help') || args.includes('-h') || args.length === 0) {
         console.log(`
-Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
-       mouse-fixes next   [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
-       mouse-fixes start  [--timeout <seconds>]
-       mouse-fixes resume [<issue>] [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
-       mouse-fixes --watch [--interval <seconds>] [--label <name>] [--timeout <seconds>]
+Usage:
+  mouse-fixes <issue> [--timeout <seconds>]
+  mouse-fixes serve [--port <number>]
 
-  <issue>              One or more issue numbers or GitHub issue URLs (required)
+Commands:
+  <issue>   Fix a GitHub issue and open a PR (default)
+  serve     Start the webhook server for Slack / Telegram integration
+
+Options:
+  --timeout <seconds>   Max Claude runtime for fix mode (default: ${DEFAULT_TIMEOUT_S})
+  --port <number>       Port for serve mode (default: ${DEFAULT_PORT})
+
+Additional fix-mode usage:
+  mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
+  mouse-fixes next   [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
+  mouse-fixes start  [--timeout <seconds>]
+  mouse-fixes resume [<issue>] [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
+  mouse-fixes --watch [--interval <seconds>] [--label <name>] [--timeout <seconds>]
+
   next                 Auto-pick the next open issue from docs/issues-priority.md
   start                Bootstrap docs/issues-priority.md from open GitHub issues
   resume [<issue>]     Resume the most recent incomplete run, or a specific issue number.
@@ -108,7 +123,6 @@ Usage: mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id
   --watch              Poll for new issues and fix them automatically
   --interval <seconds> Polling interval for --watch (default: ${DEFAULT_INTERVAL_S})
   --label <name>       Only watch issues with this label (--watch mode only)
-  --timeout <seconds>  Max Claude runtime per issue in seconds (default: ${DEFAULT_TIMEOUT_S})
   --model <model-id>   Claude model to use (e.g. claude-haiku-4-5-20251001, claude-sonnet-4-6)
                        If omitted, the claude CLI uses its own default
   --max-turns <n>      Max conversation turns Claude may take (default: ${DEFAULT_MAX_TURNS})
@@ -137,6 +151,8 @@ Config file (${CONFIG_FILENAME}):
 
 Examples:
   mouse-fixes 38
+  mouse-fixes serve
+  mouse-fixes serve --port 8080
   mouse-fixes 42 --worktree
   mouse-fixes 42 --approve=before-push
   mouse-fixes 42 --approve=before-pr
@@ -298,6 +314,20 @@ Run from inside the target git repository.
 
     // Positional args: everything that isn't a flag or a flag value
     const positional = args.filter((arg, i) => !flagIndices.has(i) && !arg.startsWith('--'));
+
+    if (positional[0] === 'serve') {
+        let port = DEFAULT_PORT;
+        const pIdx = args.indexOf('--port');
+        if (pIdx !== -1) {
+            const val = parseInt(args[pIdx + 1], 10);
+            if (isNaN(val) || val <= 0 || val > 65535) {
+                console.error('Error: --port must be a valid port number (1-65535).');
+                process.exit(1);
+            }
+            port = val;
+        }
+        return { kind: 'serve', port };
+    }
 
     if (positional[0] === 'resume') {
         const issueArg = positional[1];
@@ -1681,11 +1711,24 @@ async function runWatch(intervalSeconds: number, timeoutMs: number, config: Mous
     }
 }
 
+function runServe(port: number): void {
+    console.log(`mouse-fixes webhook server listening on port ${port}`);
+    console.log(`  POST /webhook  { "repo": "owner/repo", "issueNumber": 42 }`);
+    console.log(`  POST /slack    (Slack slash command)`);
+    console.log(`  POST /telegram (Telegram bot webhook)`);
+    startServer(port, process.cwd());
+}
+
 async function main(): Promise<void> {
     // Load .mouse-fixes.yml from the repo root (silently ignored if missing)
     const config = loadConfig();
     const command = parseArgs(config);
     const runTimestamp = makeRunTimestamp();
+
+    if (command.kind === 'serve') {
+        runServe(command.port);
+        return;
+    }
 
     if (command.kind === 'start') {
         await runStart(command.timeoutMs);
