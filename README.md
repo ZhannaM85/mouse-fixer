@@ -114,4 +114,63 @@ Prompt caching keeps repeat runs cheap: once Claude has read the main source fil
 | Not in a git repo | Error printed, exits immediately |
 | Claude times out | Warning printed; whatever Claude managed to do is left in place |
 
+## Serve mode
+
+`mouse-fixes serve` starts a long-running HTTP server that listens for webhooks from Slack or Telegram and triggers a fix run for whichever issue number is passed in the message.
+
+### Starting the server
+
+```bash
+mouse-fixes serve           # default port 3000
+mouse-fixes serve --port 8080
+```
+
+### Exposing the server with ngrok (local development)
+
+For local testing you need a public HTTPS URL. [ngrok](https://ngrok.com/) is the quickest way:
+
+```bash
+ngrok http 3000
+# → https://abc123.ngrok.io
+```
+
+Use the printed `https://` URL as `<your-url>` in the setup steps below.
+
+### Slack setup
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App**
+2. Add a **Slash Command**: `/fix` pointing to `https://<your-url>/slack`
+3. Copy the **Signing Secret** from **Basic Information**
+4. Set the environment variable:
+   ```bash
+   export SLACK_SIGNING_SECRET=<value>
+   ```
+5. Reinstall the app to your workspace
+
+**Usage:** type `/fix 42` in any channel to trigger a fix for issue #42.
+
+### Telegram setup
+
+1. Open Telegram → search **@BotFather** → send `/newbot` and follow the prompts
+2. Copy the bot token BotFather gives you
+3. Set the environment variable:
+   ```bash
+   export TELEGRAM_BOT_TOKEN=<value>
+   ```
+4. Register the webhook so Telegram forwards messages to your server:
+   ```bash
+   curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+     -d "url=https://<your-url>/telegram"
+   ```
+5. Start a chat with your bot and send `/fix 42`
+
+### Environment variables
+
+| Variable | Required for | Where to get it |
+|---|---|---|
+| `SLACK_SIGNING_SECRET` | Slack | Slack App → Basic Information |
+| `TELEGRAM_BOT_TOKEN` | Telegram | @BotFather → `/newbot` |
+| `ANTHROPIC_API_KEY` | GitHub Actions only | console.anthropic.com |
+| `GITHUB_TOKEN` | GitHub Actions only | Actions secret (auto-provided) |
+
 This Readme keeps being updated based on the chages in the code.
