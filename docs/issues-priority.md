@@ -76,7 +76,7 @@ _Allows triggering mouse-fixes from a chat message without touching the terminal
 | ~~[#9](https://github.com/ZhannaM85/mouse-fixes/issues/9)~~ | ~~feat: Slack slash command handler~~ | ~~Depends on #8~~ |
 | ~~[#10](https://github.com/ZhannaM85/mouse-fixes/issues/10)~~ | ~~feat: Telegram bot webhook handler~~ | ~~Depends on #8~~ |
 | ~~[#11](https://github.com/ZhannaM85/mouse-fixes/issues/11)~~ | ~~feat: `mouse-fixes serve` subcommand~~ | ~~Depends on #8, #9, #10~~ |
-| [#12](https://github.com/ZhannaM85/mouse-fixes/issues/12) | docs: document serve command, Slack and Telegram setup | Depends on #11 |
+| ~~[#12](https://github.com/ZhannaM85/mouse-fixes/issues/12)~~ | ~~docs: document serve command, Slack and Telegram setup~~ | ~~Depends on #11~~ |
 
 ---
 
