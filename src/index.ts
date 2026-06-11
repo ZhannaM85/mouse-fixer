@@ -846,7 +846,7 @@ async function runResume(
     {
         console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
         const done = timer.start(`Claude resume fix + git + PR (#${session.issueNumber})`);
-        claudeResult = await spawnClaude(prompt, cwd, timeoutMs, model, maxTurns);
+        claudeResult = await spawnClaude(prompt, cwd, timeoutMs, model, maxTurns, '', `Addressing Issue #${issue.number}: ${issue.title}`);
         done(claudeResult.toolCallLog || undefined);
     }
 
@@ -1446,7 +1446,7 @@ async function fixIssue(
         }
         console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
         const done = timer.start(`Claude fix + git + PR (#${issueNumber})`);
-        claudeResult = await spawnClaude(prompt, effectiveCwd, timeoutMs, model, maxTurns, prefix);
+        claudeResult = await spawnClaude(prompt, effectiveCwd, timeoutMs, model, maxTurns, prefix, `Addressing Issue #${issue.number}: ${issue.title}`);
         done(claudeResult.toolCallLog || undefined);
     }
 

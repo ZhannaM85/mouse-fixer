@@ -87,7 +87,8 @@ export async function spawnClaude(
     timeoutMs: number,
     model?: string,
     maxTurns: number = 50,
-    prefix = ''
+    prefix = '',
+    sessionName?: string
 ): Promise<RunResult> {
     return new Promise((resolve, reject) => {
         const controller = new AbortController();
@@ -95,6 +96,7 @@ export async function spawnClaude(
 
         const claudeArgs = ['-p', prompt, '--dangerously-skip-permissions', '--output-format', 'stream-json', '--verbose', '--max-turns', String(maxTurns)];
         if (model) claudeArgs.push('--model', model);
+        if (sessionName) claudeArgs.push('--name', sessionName);
 
         const proc = spawn(
             'claude',
