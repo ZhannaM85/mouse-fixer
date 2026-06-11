@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { tmpdir } from 'node:os';
 import { StepTimer, SessionStats } from './timer.js';
-import { fetchIssue, fetchAllIssues, Issue } from './github.js';
+import { fetchIssue, fetchAllIssues, fetchPR, fetchPRDiff, Issue, PullRequest } from './github.js';
 import { detectRepo, slugify, getGitDiffStats, getChangedFiles, detectDefaultBranch, runPreflightChecks, createWorktree, removeWorktree } from './git.js';
 import { createState, updateState, readState, loadState, saveState, RunStage, RunState, FailureReason } from './state.js';
 import { spawnClaude, UsageStats, runPostMortem } from './runner.js';
@@ -23,6 +23,16 @@ function parseIssueNumber(raw: string): number {
     const n = parseInt(urlMatch ? urlMatch[1] : raw, 10);
     if (isNaN(n) || n <= 0) {
         console.error(`Error: "${raw}" is not a valid issue number or GitHub issue URL.`);
+        process.exit(1);
+    }
+    return n;
+}
+
+function parsePRIdentifier(raw: string): number {
+    const urlMatch = raw.match(/\/pull\/(\d+)/);
+    const n = parseInt(urlMatch ? urlMatch[1] : raw, 10);
+    if (isNaN(n) || n <= 0) {
+        console.error(`Error: "${raw}" is not a valid PR number or GitHub PR URL.`);
         process.exit(1);
     }
     return n;
@@ -92,7 +102,8 @@ type Command =
     | { kind: 'start'; timeoutMs: number }
     | { kind: 'watch'; intervalSeconds: number; timeoutMs: number; skipChecks: boolean; autoMerge: boolean; label?: string }
     | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean }
-    | { kind: 'serve'; port: number };
+    | { kind: 'serve'; port: number }
+    | { kind: 'review'; prNumber: number; model?: string; comment: boolean; timeoutMs: number; maxTurns: number };
 
 function parseArgs(config: MouseFixesConfig = {}): Command {
     const args = process.argv.slice(2);
@@ -102,10 +113,12 @@ function parseArgs(config: MouseFixesConfig = {}): Command {
 Usage:
   mouse-fixes <issue> [--timeout <seconds>]
   mouse-fixes serve [--port <number>]
+  mouse-fixes review <pr> [--comment] [--model <model-id>]
 
 Commands:
   <issue>   Fix a GitHub issue and open a PR (default)
   serve     Start the webhook server for Slack / Telegram integration
+  review    Fetch and analyse a pull request, output a structured review
 
 Options:
   --timeout <seconds>   Max Claude runtime for fix mode (default: ${DEFAULT_TIMEOUT_S})
@@ -150,6 +163,12 @@ Config file (${CONFIG_FILENAME}):
     branchPrefix: fix/
     logDir: logs/
     worktree: true
+
+Review-mode usage:
+  mouse-fixes review 42
+  mouse-fixes review https://github.com/owner/repo/pull/42
+  mouse-fixes review 42 --comment           # post review as a GitHub PR comment
+  mouse-fixes review 42 --model claude-opus-4-8
 
 Examples:
   mouse-fixes 38
@@ -341,6 +360,17 @@ Run from inside the target git repository.
         return { kind: 'start', timeoutMs: timeoutS * 1000 };
     }
 
+    if (positional[0] === 'review') {
+        const prArg = positional[1];
+        if (!prArg) {
+            console.error('Error: review requires a PR number or GitHub PR URL.');
+            process.exit(1);
+        }
+        const prNumber = parsePRIdentifier(prArg);
+        const comment = args.includes('--comment');
+        return { kind: 'review', prNumber, model, comment, timeoutMs: timeoutS * 1000, maxTurns };
+    }
+
     let issueNumbers: number[];
     if (positional[0] === 'next') {
         issueNumbers = [resolveNextIssue(process.cwd(), config.branchPrefix)];
@@ -496,6 +526,52 @@ Rules:
 - Write ONLY the markdown file — no commits, no PRs, no other files.
 
 After writing the file, output one line: "Created docs/issues-priority.md with <N> issues across <T> tiers."`;
+}
+
+const MAX_DIFF_BYTES = 80_000;
+
+function buildReviewPrompt(pr: PullRequest, diff: string, repo: string): string {
+    const truncatedDiff = diff.length > MAX_DIFF_BYTES
+        ? diff.slice(0, MAX_DIFF_BYTES) + '\n... (diff truncated)'
+        : diff;
+    return `You are a code reviewer analysing a GitHub pull request.
+
+Repository: ${repo}
+PR #${pr.number}: ${pr.title}
+Author: ${pr.author}
+Branch: ${pr.headRefName} → ${pr.baseRefName}
+URL: ${pr.url}
+
+## PR Description
+
+${pr.body || '(no description provided)'}
+
+## Diff
+
+\`\`\`diff
+${truncatedDiff || '(no diff available)'}
+\`\`\`
+
+Analyse the pull request and output a structured review in exactly this format:
+
+## PR #${pr.number} — ${pr.title}
+
+### Summary
+- <bullet describing what this PR does>
+- <additional bullets as needed>
+
+### Risk areas
+- <specific concern or risk — include file/function name where relevant>
+- <or "None identified." if the PR looks clean>
+
+### Missing
+- [ ] <something missing: test, doc, changelog, error handling, etc.>
+- <or "Nothing missing." if everything looks complete>
+
+### Verdict
+<1-3 sentences. Overall assessment and whether you would approve, request changes, or need more context.>
+
+Be specific and concise. Reference file names and function names where relevant.`;
 }
 
 function buildResumePrompt(
@@ -934,6 +1010,95 @@ async function runResume(
     if (output && output !== '(no summary)') resumeLogParts.push(output.trim());
     resumeLogParts.push(reportText);
     writeRunLog(resumeLogDir, makeRunTimestamp(), session.issueNumber, resumeLogParts.join('\n\n') + '\n');
+}
+
+async function runReview(
+    prNumber: number,
+    timeoutMs: number,
+    model: string | undefined,
+    maxTurns: number,
+    comment: boolean,
+    config: MouseFixesConfig = {}
+): Promise<void> {
+    const cwd = process.cwd();
+    const timer = new StepTimer();
+
+    let repo: string;
+    try {
+        repo = detectRepo();
+    } catch (e) {
+        console.error(`Error: ${(e as Error).message}`);
+        console.error('Run mouse-fixes from inside a git repository with a GitHub remote.');
+        process.exit(1);
+    }
+
+    const modelLabel = model ? `  model: ${model}` : '';
+    const commentLabel = comment ? '  [--comment]' : '';
+    console.log(`\nmouse-fixes review — PR #${prNumber}${modelLabel}${commentLabel}\n`);
+    console.log(`  Repo: ${repo}`);
+
+    let pr: PullRequest;
+    {
+        const done = timer.start(`Fetch PR #${prNumber}`);
+        try {
+            pr = fetchPR(repo, prNumber);
+        } catch (e) {
+            console.error(`Error fetching PR #${prNumber}: ${(e as Error).message}`);
+            process.exit(1);
+        }
+        done();
+        console.log(`  Title: ${pr.title}`);
+        console.log(`  Author: ${pr.author}`);
+    }
+
+    let diff: string;
+    {
+        const done = timer.start(`Fetch diff for PR #${prNumber}`);
+        diff = fetchPRDiff(repo, prNumber);
+        done();
+    }
+
+    const prompt = buildReviewPrompt(pr, diff, repo);
+
+    let claudeResult: Awaited<ReturnType<typeof spawnClaude>>;
+    {
+        console.log(`  Running Claude (timeout ${timeoutMs / 1000}s)…`);
+        const done = timer.start(`Claude review (#${prNumber})`);
+        claudeResult = await spawnClaude(prompt, cwd, timeoutMs, model, maxTurns, '', `Review PR #${prNumber}: ${pr.title}`);
+        done(claudeResult.toolCallLog || undefined);
+    }
+
+    const { summary: output, timedOut, maxTurnsReached, processError } = claudeResult;
+
+    if (timedOut) console.warn('\n  Warning: Claude timed out.');
+    if (maxTurnsReached) console.warn(`\n  Warning: Claude reached the --max-turns limit (${maxTurns}).`);
+    if (processError) console.warn(`\n  Warning: Claude process encountered an error: ${processError.message}`);
+
+    if (output && output !== '(no summary)') {
+        console.log(`\n${output}\n`);
+    }
+
+    if (comment && output && output !== '(no summary)' && !timedOut && !maxTurnsReached && !processError) {
+        const done = timer.start('Post PR comment');
+        try {
+            const tempPath = join(tmpdir(), `mouse-fixes-review-${prNumber}.md`);
+            writeFileSync(tempPath, output, 'utf8');
+            execSync(`gh pr comment ${prNumber} --repo ${repo} --body-file "${tempPath}"`, { cwd, stdio: 'pipe' });
+            try { unlinkSync(tempPath); } catch { /* ignore */ }
+            console.log(`  Review posted as comment on PR #${prNumber}`);
+        } catch (e) {
+            console.error(`  Error posting comment: ${(e as Error).message}`);
+        }
+        done();
+    }
+
+    const reviewLogDir = join(cwd, config.logDir ?? 'logs');
+    const reviewLogParts: string[] = [];
+    if (output && output !== '(no summary)') reviewLogParts.push(output.trim());
+    reviewLogParts.push(timer.render());
+    writeRunLog(reviewLogDir, makeRunTimestamp(), prNumber, reviewLogParts.join('\n\n') + '\n');
+
+    timer.report();
 }
 
 async function runStart(timeoutMs: number): Promise<void> {
@@ -1734,6 +1899,11 @@ async function main(): Promise<void> {
 
     if (command.kind === 'start') {
         await runStart(command.timeoutMs);
+        return;
+    }
+
+    if (command.kind === 'review') {
+        await runReview(command.prNumber, command.timeoutMs, command.model, command.maxTurns, command.comment, config);
         return;
     }
 
