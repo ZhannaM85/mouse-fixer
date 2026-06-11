@@ -79,11 +79,7 @@ function resolveNextIssue(cwd: string, branchPrefix = 'fix/'): number {
 
         return candidate;
     }
-    if (totalFound === 0) {
-        console.error('Error: No issues found in docs/issues-priority.md');
-        process.exit(1);
-    }
-    console.log('  All issues are done! Nothing left to fix.');
+    console.log('  No open issues! All is resolved! 🎉');
     process.exit(0);
 }
 
