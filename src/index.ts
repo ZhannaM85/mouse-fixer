@@ -59,11 +59,13 @@ function resolveNextIssue(cwd: string, branchPrefix = 'fix/'): number {
     } catch { /* gh not available or API error — skip open-PR check */ }
 
     const lines = readFileSync(filePath, 'utf8').split('\n');
+    let totalFound = 0;
     for (const line of lines) {
         if (line.includes('~~')) continue;
         const m = line.match(/\[#(\d+)\]/);
         if (!m) continue;
         const candidate = parseInt(m[1], 10);
+        totalFound++;
 
         if (issuesWithOpenPR.has(candidate)) continue;
 
@@ -77,8 +79,12 @@ function resolveNextIssue(cwd: string, branchPrefix = 'fix/'): number {
 
         return candidate;
     }
-    console.error('Error: No open issues found in docs/issues-priority.md');
-    process.exit(1);
+    if (totalFound === 0) {
+        console.error('Error: No issues found in docs/issues-priority.md');
+        process.exit(1);
+    }
+    console.log('  All issues are done! Nothing left to fix.');
+    process.exit(0);
 }
 
 const DEFAULT_INTERVAL_S = 30;
