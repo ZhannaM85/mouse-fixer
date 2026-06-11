@@ -85,7 +85,7 @@ _Expands the tool beyond issue-fixing; self-contained and can be done any time a
 
 | # | Issue | Notes |
 |---|-------|-------|
-| [#53](https://github.com/ZhannaM85/mouse-fixes/issues/53) | feat: `mouse-fixes review <PR>` to summarise and analyse a pull request | Self-contained; no dependencies |
+| ~~[#53](https://github.com/ZhannaM85/mouse-fixes/issues/53)~~ | ~~feat: `mouse-fixes review <PR>` to summarise and analyse a pull request~~ | ~~Self-contained; no dependencies~~ |
 
 ---
 
