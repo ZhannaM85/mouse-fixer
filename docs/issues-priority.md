@@ -95,7 +95,7 @@ _Introduces specialized agent roles that hand off structured context between sta
 | # | Issue | Notes |
 |---|-------|-------|
 | ~~[#23](https://github.com/ZhannaM85/mouse-fixes/issues/23)~~ | ~~feat: multi-agent pipeline orchestrator (core infrastructure)~~ | ~~Start here — required by #24, #25, #26~~ |
-| [#24](https://github.com/ZhannaM85/mouse-fixes/issues/24) | feat: Business Analyst agent role | Depends on #23 |
+| ~~[#24](https://github.com/ZhannaM85/mouse-fixes/issues/24)~~ | ~~feat: Business Analyst agent role~~ | ~~Depends on #23~~ |
 | [#25](https://github.com/ZhannaM85/mouse-fixes/issues/25) | feat: QA agent role | Depends on #23, #24 |
 | [#26](https://github.com/ZhannaM85/mouse-fixes/issues/26) | feat: `--pipeline` flag to enable multi-agent mode | Depends on #23–#25; ties it all together |
 
