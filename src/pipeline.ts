@@ -12,6 +12,7 @@ export interface PipelineContext {
     issue: Issue;
     baOutput?: string;
     devOutput?: string;
+    qaOutput?: string;
     diffStats?: DiffStats;
 }
 
