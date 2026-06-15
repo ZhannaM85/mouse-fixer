@@ -2,28 +2,27 @@
 
 TypeScript CLI project. Entry point: `src/index.ts`. Run with `tsx`.
 
-## Code Search — use ast-index
+## Code Search — use zm-index
 
-**Always use `ast-index` first** for any code search task. It is indexed and 17-69x faster than grep.
+**Always use `zm-index` first** for any code search task. It is indexed and much faster than grep.
 
 ```bash
-ast-index search "Payment"          # universal search
-ast-index symbol "fixIssue"         # find a symbol
-ast-index usages "spawnClaude"      # find all usages
-ast-index outline "src/runner.ts"   # file structure
-ast-index class "StepTimer"         # find a class
+zm-index search "Payment"          # universal search
+zm-index search "fixIssue"         # find a symbol
+zm-index usages "spawnClaude"      # find all usages
+zm-index outline src/runner.ts     # file structure
+zm-index callers "fixIssue"        # find all call sites
 ```
 
 Only fall back to grep/Grep when:
-- ast-index returns empty results
+- zm-index returns empty results
 - Searching regex patterns
 - Searching string literals inside code
 
 Keep the index fresh after file changes:
 
 ```bash
-ast-index update   # incremental
-ast-index rebuild  # full rebuild
+zm-index rebuild  # full rebuild
 ```
 
 ## Source layout

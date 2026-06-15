@@ -772,7 +772,7 @@ function findResumableSessions(cwd: string, repo: string, branchPrefix = 'fix/')
         }
     }
 
-    // --- Source 2: local branches with no open PR ---
+    // --- Source 2: local branches with no open or merged PR ---
     try {
         const branchList = execSync('git branch --format=%(refname:short)', { cwd, encoding: 'utf8' }).trim();
         const branches = branchList.split('\n').filter(Boolean);
@@ -782,17 +782,17 @@ function findResumableSessions(cwd: string, repo: string, branchPrefix = 'fix/')
             const issueNumber = parseInt(m[1], 10);
             if (seenIssueNumbers.has(issueNumber)) continue;
 
-            let hasOpenPr = false;
+            let hasPr = false;
             try {
                 const prJson = execSync(
-                    `gh pr list --repo ${repo} --head ${branch} --state open --json number`,
+                    `gh pr list --repo ${repo} --head ${branch} --state all --json number,state`,
                     { cwd, encoding: 'utf8' }
                 ).trim();
-                const prs = JSON.parse(prJson) as unknown[];
-                hasOpenPr = prs.length > 0;
+                const prs = JSON.parse(prJson) as { state: string }[];
+                hasPr = prs.some(pr => pr.state === 'OPEN' || pr.state === 'MERGED');
             } catch { /* gh not available or API error — assume no PR */ }
 
-            if (!hasOpenPr) {
+            if (!hasPr) {
                 sessions.push({
                     issueNumber,
                     branch,
