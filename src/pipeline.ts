@@ -10,6 +10,8 @@ export interface DiffStats {
 export interface PipelineContext {
     repo: string;
     issue: Issue;
+    defaultBranch: string;
+    branch: string;
     baOutput?: string;
     devOutput?: string;
     qaOutput?: string;
@@ -26,6 +28,7 @@ export interface PipelineStage {
 export interface PipelineResult {
     ctx: PipelineContext;
     usage: UsageStats;
+    stageUsage: Array<{ name: string; usage: UsageStats | null }>;
     timer: StepTimer;
     /** Set when a stage failed; subsequent stages were not run. */
     failedStage?: string;
@@ -56,6 +59,7 @@ export async function runPipeline(
         totalCostUsd: 0,
         toolCallCount: 0,
     };
+    const stageUsage: Array<{ name: string; usage: UsageStats | null }> = [];
 
     for (const stage of stages) {
         const prompt = stage.buildPrompt(ctx);
@@ -64,6 +68,8 @@ export async function runPipeline(
         const done = timer.start(stage.name);
         const result = await spawnClaude(prompt, cwd, timeoutMs, model, maxTurns, prefix, sessionName);
         done(result.toolCallLog || undefined);
+
+        stageUsage.push({ name: stage.name, usage: result.usage });
 
         if (result.usage) {
             usage.inputTokens += result.usage.inputTokens;
@@ -85,9 +91,9 @@ export async function runPipeline(
                 ? 'reached max turns'
                 : `process error: ${result.processError!.message}`;
             console.error(`\n  Pipeline stopped at stage "${stage.name}": ${reason}`);
-            return { ctx, usage, timer, failedStage: stage.name };
+            return { ctx, usage, stageUsage, timer, failedStage: stage.name };
         }
     }
 
-    return { ctx, usage, timer };
+    return { ctx, usage, stageUsage, timer };
 }
