@@ -13,6 +13,10 @@ import { loadConfig, MouseFixesConfig, CONFIG_FILENAME } from './config.js';
 import { QualityMode, QualityResults, runQualityChecks, formatQualityLog } from './quality.js';
 import { buildPrompt } from './prompt.js';
 import { startServer } from './server.js';
+import { runPipeline, PipelineContext, PipelineStage } from './pipeline.js';
+import { baStage } from './agents/ba.js';
+import { devStage } from './agents/dev.js';
+import { qaStage } from './agents/qa.js';
 
 const DEFAULT_TIMEOUT_S = 600; // 10 minutes
 const DEFAULT_PORT = 3000;
@@ -98,7 +102,7 @@ const DEFAULT_INTERVAL_S = 30;
 type ApproveCheckpoint = 'before-push' | 'before-pr';
 
 type Command =
-    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean; approve?: ApproveCheckpoint; maxCost?: number; autoMerge: boolean; worktree: boolean; quality: QualityMode }
+    | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean; approve?: ApproveCheckpoint; maxCost?: number; autoMerge: boolean; worktree: boolean; quality: QualityMode; pipeline: boolean; roles: string[] }
     | { kind: 'start'; timeoutMs: number }
     | { kind: 'watch'; intervalSeconds: number; timeoutMs: number; skipChecks: boolean; autoMerge: boolean; label?: string }
     | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean }
@@ -150,6 +154,8 @@ Additional fix-mode usage:
   --quality=warn       Run checks before PR; report failures but still open PR (default)
   --no-quality         Skip all quality checks
   --skip-checks        Bypass all pre-flight git safety checks (for CI or advanced users)
+  --pipeline           Run BA → Dev → QA multi-agent pipeline instead of single-agent mode
+  --roles <list>       Comma-separated subset of ba,dev,qa (default: ba,dev,qa). dev is always required.
 
 Config file (${CONFIG_FILENAME}):
   Place a ${CONFIG_FILENAME} file in the repo root to set per-repo defaults.
@@ -187,6 +193,9 @@ Examples:
   mouse-fixes 42 --max-cost 1.50
   mouse-fixes 42 --quality=strict
   mouse-fixes 42 --no-quality
+  mouse-fixes 42 --pipeline
+  mouse-fixes 42 --pipeline --roles ba,dev
+  mouse-fixes 42 --pipeline --timeout 900
   mouse-fixes next --max-cost 0.50
   mouse-fixes next
   mouse-fixes start
@@ -206,6 +215,7 @@ Run from inside the target git repository.
     const dryRun = args.includes('--dry-run');
     const autoMerge = args.includes('--auto-merge') || (config.autoMerge ?? false);
     const worktree = args.includes('--worktree') || (config.worktree ?? false);
+    const pipeline = args.includes('--pipeline');
 
     let quality: QualityMode = config.quality ?? 'warn';
     if (args.includes('--no-quality')) {
@@ -295,6 +305,29 @@ Run from inside the target git repository.
         maxCost = val;
     }
 
+    // --roles: comma-separated subset of ba,dev,qa; dev always required
+    const ALLOWED_ROLES = new Set(['ba', 'dev', 'qa']);
+    let roles: string[] = ['ba', 'dev', 'qa'];
+    const rolesIdx = args.indexOf('--roles');
+    if (rolesIdx !== -1) {
+        const val = args[rolesIdx + 1];
+        if (!val || val.startsWith('--')) {
+            console.error('Error: --roles requires a comma-separated list (e.g. ba,dev,qa).');
+            process.exit(1);
+        }
+        const parsed = val.split(',').map(r => r.trim().toLowerCase()).filter(Boolean);
+        const invalid = parsed.filter(r => !ALLOWED_ROLES.has(r));
+        if (invalid.length > 0) {
+            console.error(`Error: Invalid role(s): ${invalid.join(', ')}. Allowed: ba, dev, qa.`);
+            process.exit(1);
+        }
+        if (!parsed.includes('dev')) {
+            console.error('Error: --roles must include "dev" (the dev stage is always required).');
+            process.exit(1);
+        }
+        roles = parsed;
+    }
+
     // --watch mode
     const watchIdx = args.indexOf('--watch');
     if (watchIdx !== -1) {
@@ -329,6 +362,10 @@ Run from inside the target git repository.
             flagIndices.add(idx + 1);
         }
     });
+    if (rolesIdx !== -1) {
+        flagIndices.add(rolesIdx);
+        flagIndices.add(rolesIdx + 1);
+    }
     const approveIdx = approveEqIdx !== -1 ? approveEqIdx : approveSpaceIdx;
     if (approveIdx !== -1) flagIndices.add(approveIdx);
     if (approveValueIdx !== -1) flagIndices.add(approveValueIdx);
@@ -382,7 +419,7 @@ Run from inside the target git repository.
         issueNumbers = positional.map(arg => parseIssueNumber(arg));
     }
 
-    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks, dryRun, approve, maxCost, autoMerge, worktree, quality };
+    return { kind: 'fix', issueNumbers, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks, dryRun, approve, maxCost, autoMerge, worktree, quality, pipeline, roles };
 }
 
 function buildWorktreePrompt(repo: string, issue: { number: number; title: string; body: string; labels: string[] }, branch: string): string {
@@ -1886,6 +1923,106 @@ function runServe(port: number): void {
     startServer(port, process.cwd());
 }
 
+async function runPipelineFix(
+    issueNumber: number,
+    repo: string,
+    timeoutMs: number,
+    model: string | undefined,
+    maxTurns: number,
+    roles: string[],
+    skipChecks: boolean,
+    config: MouseFixesConfig = {},
+): Promise<void> {
+    const cwd = process.cwd();
+    const runTimestamp = makeRunTimestamp();
+
+    // Fetch the issue
+    let issue: Awaited<ReturnType<typeof fetchIssue>>;
+    {
+        console.log(`  Fetching issue #${issueNumber}…`);
+        try {
+            issue = fetchIssue(repo, issueNumber);
+        } catch (e) {
+            console.error(`Error fetching issue #${issueNumber}: ${(e as Error).message}`);
+            process.exit(1);
+        }
+        console.log(`  Title: ${issue.title}`);
+    }
+
+    const defaultBranch = config.defaultBaseBranch ?? detectDefaultBranch();
+    const branchPrefix = config.branchPrefix ?? 'fix/';
+    const branch = `${branchPrefix}${issue.number}-${slugify(issue.title)}`;
+
+    if (!skipChecks) {
+        const preflightErrors = runPreflightChecks(cwd, branch);
+        if (preflightErrors.length > 0) {
+            console.error('\n  Pre-flight checks failed:');
+            for (const err of preflightErrors) {
+                console.error(`\n  ✗ ${err.message}`);
+            }
+            console.error('\n  Fix the issues above and re-run, or pass --skip-checks to bypass.\n');
+            process.exit(1);
+        }
+    }
+
+    // Build stage list based on roles (order: ba → dev → qa)
+    const stages: PipelineStage[] = [];
+    if (roles.includes('ba')) stages.push(baStage);
+    stages.push(devStage);
+    if (roles.includes('qa')) stages.push(qaStage);
+
+    const ctx: PipelineContext = { repo, issue, defaultBranch, branch };
+
+    console.log(`  Running pipeline: ${stages.map(s => s.name).join(' → ')} (timeout ${timeoutMs / 1000}s)…`);
+
+    const pipelineResult = await runPipeline(stages, ctx, timeoutMs, cwd, model, maxTurns);
+
+    if (pipelineResult.failedStage) {
+        console.warn(`\n  Pipeline stopped at stage "${pipelineResult.failedStage}". Branch "${branch}" left intact for inspection.`);
+    } else {
+        markIssueDone(issueNumber, cwd, branch);
+    }
+
+    // Print QA output if available
+    const { qaOutput, devOutput } = pipelineResult.ctx;
+    if (qaOutput) {
+        console.log(`\n${qaOutput}\n`);
+    } else if (devOutput && devOutput !== '(no summary)') {
+        console.log(`\n${devOutput}\n`);
+    }
+
+    // Aggregate stats for the token table
+    const { linesAdded, linesDeleted } = getGitDiffStats(cwd, branch, defaultBranch);
+    const sessionStats: SessionStats = {
+        ...pipelineResult.usage,
+        promptOverheadTokens: 0,
+        linesAdded,
+        linesDeleted,
+    };
+
+    const reportText = pipelineResult.timer.render(sessionStats);
+    console.log('\n' + reportText);
+
+    // Per-agent token breakdown
+    const stagesWithUsage = pipelineResult.stageUsage.filter(s => s.usage !== null);
+    if (stagesWithUsage.length > 1) {
+        const fmtN = (n: number) => n.toLocaleString('en-US');
+        console.log('\nPer-agent token breakdown:');
+        for (const { name, usage } of stagesWithUsage) {
+            if (!usage) continue;
+            const cost = usage.totalCostUsd > 0 ? `  $${usage.totalCostUsd.toFixed(4)}` : '';
+            console.log(`  ${name.padEnd(24)} in: ${fmtN(usage.inputTokens).padStart(8)}  out: ${fmtN(usage.outputTokens).padStart(6)}  tools: ${usage.toolCallCount}${cost}`);
+        }
+    }
+
+    const logDir = join(cwd, config.logDir ?? 'logs');
+    const logParts: string[] = [];
+    if (qaOutput) logParts.push(qaOutput.trim());
+    else if (devOutput && devOutput !== '(no summary)') logParts.push(devOutput.trim());
+    logParts.push(reportText);
+    writeRunLog(logDir, runTimestamp, issueNumber, logParts.join('\n\n') + '\n');
+}
+
 async function main(): Promise<void> {
     // Load .mouse-fixes.yml from the repo root (silently ignored if missing)
     const config = loadConfig();
@@ -1917,7 +2054,7 @@ async function main(): Promise<void> {
         return;
     }
 
-    const { issueNumbers, timeoutMs, model, maxTurns, skipChecks, dryRun, approve, maxCost, autoMerge, worktree, quality } = command;
+    const { issueNumbers, timeoutMs, model, maxTurns, skipChecks, dryRun, approve, maxCost, autoMerge, worktree, quality, pipeline, roles } = command;
 
     if (approve && issueNumbers.length > 1) {
         console.error('Error: --approve can only be used with a single issue number.');
@@ -1933,8 +2070,9 @@ async function main(): Promise<void> {
     const autoMergeLabel = autoMerge ? '  [AUTO-MERGE]' : '';
     const worktreeLabel = worktree ? '  [WORKTREE]' : '';
     const qualityLabel = quality === 'off' ? '  [NO-QUALITY]' : quality === 'strict' ? '  [QUALITY: strict]' : '';
+    const pipelineLabel = pipeline ? `  [PIPELINE: ${roles.join('→')}]` : '';
     const issueLabel = issueNumbers.map(n => `#${n}`).join(', ');
-    console.log(`\nmouse-fixes — issue${issueNumbers.length > 1 ? 's' : ''} ${issueLabel}${modelLabel}${dryRunLabel}${approveLabel}${maxCostLabel}${autoMergeLabel}${worktreeLabel}${qualityLabel}\n`);
+    console.log(`\nmouse-fixes — issue${issueNumbers.length > 1 ? 's' : ''} ${issueLabel}${modelLabel}${dryRunLabel}${approveLabel}${maxCostLabel}${autoMergeLabel}${worktreeLabel}${qualityLabel}${pipelineLabel}\n`);
 
     // 1. Detect repo (once, shared across all issues)
     let repo: string;
@@ -1949,6 +2087,16 @@ async function main(): Promise<void> {
         }
         done();
         console.log(`  Repo: ${repo}`);
+    }
+
+    // Pipeline mode: hand off to runPipelineFix and return early
+    if (pipeline) {
+        if (issueNumbers.length > 1) {
+            console.error('Error: --pipeline can only be used with a single issue number.');
+            process.exit(1);
+        }
+        await runPipelineFix(issueNumbers[0], repo, timeoutMs, model, maxTurns, roles, skipChecks, config);
+        return;
     }
 
     // 2. Run issues — sequentially when --auto-merge so each fix builds on the merged main,
