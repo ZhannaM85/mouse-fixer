@@ -6,3 +6,5 @@ tmp/
 .mouse-fixes/
 .mouse-fixes-state.json
 logs/
+.zm-index/
+*.zm-index.db
