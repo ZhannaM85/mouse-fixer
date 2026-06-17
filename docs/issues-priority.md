@@ -106,7 +106,7 @@ _Integration tests with real git fixtures and mocked gh CLI — catch orchestrat
 
 | # | Issue | Notes |
 |---|-------|-------|
-| [#69](https://github.com/ZhannaM85/mouse-fixes/issues/69) | feat: integration test suite with real git fixtures and mocked gh CLI | Do before Tier 9; tests should gate CI (#19) |
+| ~~[#69](https://github.com/ZhannaM85/mouse-fixes/issues/69)~~ | ~~feat: integration test suite with real git fixtures and mocked gh CLI~~ | ~~Do before Tier 9; tests should gate CI (#19)~~ |
 
 ---
 

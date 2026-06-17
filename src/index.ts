@@ -4,6 +4,7 @@ import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue, fetchAllIssues, fetchPR, fetchPRDiff, Issue, PullRequest } from './github.js';
 import { detectRepo, slugify, getGitDiffStats, getChangedFiles, detectDefaultBranch, runPreflightChecks, createWorktree, removeWorktree } from './git.js';
@@ -22,7 +23,7 @@ const DEFAULT_TIMEOUT_S = 600; // 10 minutes
 const DEFAULT_PORT = 3000;
 const DEFAULT_MAX_TURNS = 50;
 
-function parseIssueNumber(raw: string): number {
+export function parseIssueNumber(raw: string): number {
     const urlMatch = raw.match(/\/issues\/(\d+)/);
     const n = parseInt(urlMatch ? urlMatch[1] : raw, 10);
     if (isNaN(n) || n <= 0) {
@@ -42,7 +43,7 @@ function parsePRIdentifier(raw: string): number {
     return n;
 }
 
-function resolveNextIssue(cwd: string, branchPrefix = 'fix/'): number {
+export function resolveNextIssue(cwd: string, branchPrefix = 'fix/'): number {
     // Always read from a fresh main so we don't re-pick issues fixed in unmerged PRs
     const defaultBranch = detectDefaultBranch();
     try {
@@ -703,7 +704,7 @@ interface ResumableSession {
  *   1. .mouse-fixes/state/<N>.json files whose stage is not "done"
  *   2. Local branches matching fix/<N>-* with no open PR (catches runs without a state file)
  */
-function findResumableSessions(cwd: string, repo: string, branchPrefix = 'fix/'): ResumableSession[] {
+export function findResumableSessions(cwd: string, repo: string, branchPrefix = 'fix/'): ResumableSession[] {
     const sessions: ResumableSession[] = [];
     const seenIssueNumbers = new Set<number>();
 
@@ -811,8 +812,25 @@ function findResumableSessions(cwd: string, repo: string, branchPrefix = 'fix/')
     return sessions;
 }
 
-function escapeRegex(s: string): string {
+export function escapeRegex(s: string): string {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Extract the last `.../pull/<n>` URL from free-form text (Claude's chat output may add trailing text after it). */
+export function extractPrUrl(text: string): string | null {
+    const matches = [...text.trim().matchAll(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/g)];
+    return matches.length > 0 ? matches.at(-1)![0] : null;
+}
+
+/** Wrap the table cells of a docs/issues-priority.md row in strikethrough once its issue is done. */
+export function applyStrikethrough(content: string, issueNumber: number): string {
+    return content.split('\n').map(line => {
+        if (!line.includes(`[#${issueNumber}]`) || line.includes('~~')) return line;
+        return line.replace(/\|([^|]+)/g, (_, cell) => {
+            const trimmed = cell.trim();
+            return trimmed ? `| ~~${trimmed}~~ ` : `|${cell}`;
+        });
+    }).join('\n');
 }
 
 function makeRunTimestamp(): string {
@@ -980,9 +998,7 @@ async function runResume(
     }
 
     // Extract PR URL from output — scan all lines so trailing text after the URL doesn't cause it to be lost
-    const trimmedOutput = output.trim();
-    const prUrlMatch = [...trimmedOutput.matchAll(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/g)].at(-1);
-    const prUrl = prUrlMatch ? prUrlMatch[0] : null;
+    const prUrl = extractPrUrl(output);
 
     // Finalise state
     const filesChanged = getChangedFiles(cwd, session.branch, defaultBranch);
@@ -1203,7 +1219,7 @@ async function runStart(timeoutMs: number): Promise<void> {
     }
 }
 
-function markIssueDone(issueNumber: number, cwd: string, branch: string): void {
+export function markIssueDone(issueNumber: number, cwd: string, branch: string): void {
     // Switch to the feature branch so the commit lands there, not on the default branch
     try {
         execSync(`git checkout ${branch}`, { cwd, stdio: 'pipe' });
@@ -1216,13 +1232,7 @@ function markIssueDone(issueNumber: number, cwd: string, branch: string): void {
     if (!existsSync(filePath)) return;
 
     const original = readFileSync(filePath, 'utf8');
-    const updated = original.split('\n').map(line => {
-        if (!line.includes(`[#${issueNumber}]`) || line.includes('~~')) return line;
-        return line.replace(/\|([^|]+)/g, (_, cell) => {
-            const trimmed = cell.trim();
-            return trimmed ? `| ~~${trimmed}~~ ` : `|${cell}`;
-        });
-    }).join('\n');
+    const updated = applyStrikethrough(original, issueNumber);
 
     if (updated !== original) {
         writeFileSync(filePath, updated, 'utf8');
@@ -1528,8 +1538,7 @@ function performPrOnly(branch: string, prBody: string, issueNumber: number, issu
             `gh pr create --title "Fix #${issueNumber}: ${issueTitle}" --body-file "${tempPath}"`,
             { cwd, encoding: 'utf8' }
         ).trim();
-        const urlMatch = out.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/);
-        const prUrl = urlMatch ? urlMatch[0] : null;
+        const prUrl = extractPrUrl(out);
         if (prUrl) console.log(`  PR created: ${prUrl}`);
         return prUrl;
     } catch (e) {
@@ -1685,9 +1694,7 @@ async function fixIssue(
     }
 
     // Extract PR URL from output — scan all lines so trailing text after the URL doesn't cause it to be lost
-    const trimmed = output.trim();
-    const prUrlMatch = [...trimmed.matchAll(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/g)].at(-1);
-    let prUrl: string | null = prUrlMatch ? prUrlMatch[0] : null;
+    let prUrl: string | null = extractPrUrl(output);
 
     // Post-run gate: cost check, quality check, and optional human approval
     let approvalDeclined = false;
@@ -2169,7 +2176,10 @@ async function main(): Promise<void> {
     }
 }
 
-main().catch((e) => {
-    console.error('Unexpected error:', e);
-    process.exit(1);
-});
+// Only run the CLI when this file is executed directly — not when imported (e.g. by tests).
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+    main().catch((e) => {
+        console.error('Unexpected error:', e);
+        process.exit(1);
+    });
+}

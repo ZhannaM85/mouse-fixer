@@ -12,11 +12,13 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "build": "tsc",
-    "prepare": "tsc"
+    "prepare": "tsc",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.9"
   }
 }
