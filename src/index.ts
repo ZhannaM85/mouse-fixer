@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, existsSync, readdirSync, unlinkSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, unlinkSync, mkdirSync, realpathSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { tmpdir } from 'node:os';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue, fetchAllIssues, fetchPR, fetchPRDiff, Issue, PullRequest } from './github.js';
 import { detectRepo, slugify, getGitDiffStats, getChangedFiles, detectDefaultBranch, runPreflightChecks, createWorktree, removeWorktree } from './git.js';
@@ -74,13 +74,11 @@ export function resolveNextIssue(cwd: string, branchPrefix = 'fix/'): number {
     } catch { /* gh not available or API error — skip open-PR check */ }
 
     const lines = readFileSync(filePath, 'utf8').split('\n');
-    let totalFound = 0;
     for (const line of lines) {
         if (line.includes('~~')) continue;
         const m = line.match(/\[#(\d+)\]/);
         if (!m) continue;
         const candidate = parseInt(m[1], 10);
-        totalFound++;
 
         if (issuesWithOpenPR.has(candidate)) continue;
 
@@ -2177,7 +2175,15 @@ async function main(): Promise<void> {
 }
 
 // Only run the CLI when this file is executed directly — not when imported (e.g. by tests).
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+// Use realpathSync so that a symlinked global install (npm install -g .) resolves correctly:
+// import.meta.url reflects the real file path while process.argv[1] may be the symlink path.
+let _isMain: boolean;
+try {
+    _isMain = realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1] ?? '');
+} catch {
+    _isMain = import.meta.url === pathToFileURL(process.argv[1] ?? '').href;
+}
+if (_isMain) {
     main().catch((e) => {
         console.error('Unexpected error:', e);
         process.exit(1);
