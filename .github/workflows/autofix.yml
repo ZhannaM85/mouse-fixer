@@ -1,0 +1,30 @@
+name: Auto-fix issue with mouse-fixes
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  autofix:
+    if: github.event.label.name == 'autofix'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install -g @anthropic-ai/claude-code mouse-fixes
+
+      - name: Fix issue and open PR
+        run: mouse-fixes ${{ github.event.issue.number }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
