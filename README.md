@@ -18,19 +18,21 @@ Lightweight CLI that takes a GitHub issue number, asks Claude Code to fix it **a
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 18+
 - [`gh`](https://cli.github.com/) — authenticated with your GitHub account, or `GITHUB_TOKEN` set in your environment
 - [`claude`](https://claude.ai/code) — Claude Code CLI installed and logged in
 - Run from inside a local clone of the target git repository
 
+## Installation
+
+```bash
+npm install -g mouse-fixes
+```
+
 ## Usage
 
 ```bash
-# Install once (from the mouse-fixes directory)
-cd path/to/mouse-fixes && npm link
-
-# Then from inside any repo
-cd path/to/your-repo
+# From inside any git repo
 mouse-fixes 38
 mouse-fixes https://github.com/owner/repo/issues/38
 mouse-fixes 49 --timeout 300
