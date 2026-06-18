@@ -137,6 +137,40 @@ Prompt caching keeps repeat runs cheap: once Claude has read the main source fil
 | Not in a git repo | Error printed, exits immediately |
 | Claude times out | Warning printed; whatever Claude managed to do is left in place |
 
+## Project structure
+
+<img alt="dependency graph" src="docs/assets/dependency-graph.svg" width="800">
+
+| File | Role |
+|------|------|
+| `src/index.ts` | CLI entry point — parses arguments, loads config, orchestrates all commands |
+| `src/runner.ts` | Spawns the `claude` process, streams JSON output, returns results and usage stats |
+| `src/github.ts` | Thin wrappers around the `gh` CLI — fetches issues, PRs, and diffs |
+| `src/git.ts` | Preflight checks, repo detection, worktree create/remove, diff stats |
+| `src/prompt.ts` | Builds the standard single-agent prompt given to Claude |
+| `src/config.ts` | Loads `.mouse-fixes.yml` from the repo root |
+| `src/state.ts` | Persists run state to `.mouse-fixes/state/<N>.json` |
+| `src/timer.ts` | Step timing and the token/cost stats table printed at the end of each run |
+| `src/quality.ts` | Runs lint/typecheck/test/build before opening a PR (`--quality` flag) |
+| `src/server.ts` | HTTP server for Slack, Telegram, and generic webhook triggers |
+| `src/pipeline.ts` | Orchestrates the multi-agent BA → Dev → QA chain (`--pipeline` flag) |
+| `src/agents/ba.ts` | Business Analyst prompt — analyses the issue and produces acceptance criteria |
+| `src/agents/dev.ts` | Developer prompt — implements the fix using BA output as a guide |
+| `src/agents/qa.ts` | QA prompt — reviews the diff against acceptance criteria, read-only |
+
+## Operating modes
+
+| Mode | Command | What happens |
+|------|---------|--------------|
+| **fix** | `mouse-fixes 42` | Single Claude run → branch → commit → push → PR |
+| **pipeline** | `mouse-fixes 42 --pipeline` | BA analyses the issue → Dev fixes it → QA reviews the diff |
+| **serve** | `mouse-fixes serve` | HTTP server accepts Slack, Telegram, and webhook triggers |
+| **watch** | `mouse-fixes --watch` | Polls GitHub for new labelled issues and auto-fixes them |
+| **next** | `mouse-fixes next` | Picks the next open issue from `docs/issues-priority.md` and fixes it |
+| **resume** | `mouse-fixes resume` | Continues the most recent interrupted run |
+| **start** | `mouse-fixes start` | Bootstraps `docs/issues-priority.md` from all open GitHub issues |
+| **review** | `mouse-fixes review 42` | Fetches a PR and outputs a structured code review |
+
 ## Serve mode
 
 `mouse-fixes serve` starts a long-running HTTP server that listens for webhooks from Slack or Telegram and triggers a fix run for whichever issue number is passed in the message.
