@@ -22,11 +22,11 @@ export function startServer(port: number, cwd: string): void {
         req.on('end', () => {
             console.log(`[server] ${req.method} ${url}`);
             if (url === '/webhook') {
-                void handleWebhook(body, cwd, res);
+                void handleWebhook(body, req.headers, cwd, res);
             } else if (url === '/slack') {
                 void handleSlack(body, req.headers, cwd, res);
             } else {
-                void handleTelegram(body, cwd, res);
+                void handleTelegram(body, req.headers, cwd, res);
             }
         });
     });
@@ -36,7 +36,19 @@ export function startServer(port: number, cwd: string): void {
     });
 }
 
-async function handleWebhook(body: string, cwd: string, res: http.ServerResponse): Promise<void> {
+async function handleWebhook(body: string, headers: http.IncomingHttpHeaders, cwd: string, res: http.ServerResponse): Promise<void> {
+    const webhookSecret = process.env.WEBHOOK_SECRET;
+    if (!webhookSecret) {
+        return sendJson(res, 500, { error: 'WEBHOOK_SECRET not configured' });
+    }
+    const authHeader = (headers['authorization'] as string | undefined) ?? '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const expected = Buffer.from(webhookSecret);
+    const received = Buffer.from(token);
+    if (expected.length !== received.length || !timingSafeEqual(expected, received)) {
+        return sendJson(res, 401, { error: 'Unauthorized' });
+    }
+
     let payload: { repo?: unknown; issueNumber?: unknown };
     try {
         payload = JSON.parse(body) as { repo?: unknown; issueNumber?: unknown };
@@ -219,7 +231,19 @@ type TelegramPayload = {
     };
 };
 
-async function handleTelegram(body: string, cwd: string, res: http.ServerResponse): Promise<void> {
+async function handleTelegram(body: string, headers: http.IncomingHttpHeaders, cwd: string, res: http.ServerResponse): Promise<void> {
+    const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    if (secret) {
+        const token = (headers['x-telegram-bot-api-secret-token'] as string | undefined) ?? '';
+        const expected = Buffer.from(secret);
+        const received = Buffer.from(token);
+        if (expected.length !== received.length || !timingSafeEqual(expected, received)) {
+            res.writeHead(200);
+            res.end();
+            return;
+        }
+    }
+
     let payload: TelegramPayload;
     try {
         payload = JSON.parse(body) as TelegramPayload;
