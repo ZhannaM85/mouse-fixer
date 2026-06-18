@@ -118,4 +118,4 @@ _Packaging and CI setup. Do last — the tool should be stable before publishing
 | ~~fix: add `"files": ["dist/"]` to package.json~~ | ~~Without this, npm excludes `dist/` (gitignored) from the published tarball — breaking `npm install -g`~~ | ~~No GitHub issue — fixed directly~~ |
 | ~~[#19](https://github.com/ZhannaM85/mouse-fixes/issues/19)~~ | ~~feat: GitHub Actions workflow file~~ | ~~Depends on #22 (correct package name)~~ |
 | ~~[#20](https://github.com/ZhannaM85/mouse-fixes/issues/20)~~ | ~~docs: GitHub Actions setup guide in README~~ | ~~Depends on #19~~ |
-| [#57](https://github.com/ZhannaM85/mouse-fixes/issues/57) | feat: prepare and publish package to npm (first release checklist) | Supersedes #21; do last — full pre-publish and ongoing release checklist |
+| ~~[#57](https://github.com/ZhannaM85/mouse-fixes/issues/57)~~ | ~~feat: prepare and publish package to npm (first release checklist)~~ | ~~Supersedes #21; do last — full pre-publish and ongoing release checklist~~ |
