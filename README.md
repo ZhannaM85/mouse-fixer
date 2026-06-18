@@ -56,6 +56,27 @@ The difference is **who needs to be at the keyboard**:
 
 mouse-fixes pays off when its core feature — **zero human involvement** — is what you actually need.
 
+## GitHub Actions (event-driven, no server needed)
+
+The `autofix` label triggers an automated fix run on any issue. Copy the example workflow into your repo:
+
+```bash
+mkdir -p .github/workflows
+curl -o .github/workflows/autofix.yml \
+  https://raw.githubusercontent.com/ZhannaM85/mouse-fixer/main/.github/workflows/autofix.yml
+```
+
+**Required secrets** — add these in your repo under Settings → Secrets → Actions:
+
+| Secret | Where to get it |
+|---|---|
+| `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) → API Keys |
+| `GITHUB_TOKEN` | Automatically provided by GitHub Actions — no setup needed |
+
+**Usage:** Open an issue in your repo and add the `autofix` label. The workflow starts automatically and posts a PR link in the Actions log when done.
+
+**Note:** API calls are billed to your Anthropic account. Each run costs roughly the same as asking Claude to fix the issue interactively.
+
 ## What it does
 
 | Step | Description |
