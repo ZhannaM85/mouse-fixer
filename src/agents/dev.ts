@@ -26,7 +26,7 @@ Instructions:
 2. Read the relevant source files, understand the problem, and implement a minimal fix.
    Follow the existing code style and patterns in this repository.
 
-2.5. Update or create \`docs/ARCHITECTURE.md\`:
+3. Update or create \`docs/ARCHITECTURE.md\`:
    - If the file already exists: read it, then add or update a section for each new file you created,
      following the exact structure used in existing entries.
    - If the file does not exist: create \`docs/\` if needed, then create \`docs/ARCHITECTURE.md\` with:
@@ -35,9 +35,9 @@ Instructions:
      - Each entry: a \`### path/to/file.ts\` heading, a **Why it exists:** sentence,
        and a table of exports/functions with their purpose.
    - In both cases: explain WHY each file exists (the architectural reason), not just what it does.
-   - Include \`docs/ARCHITECTURE.md\` in the list of files you stage in step 3a.
+   - Include \`docs/ARCHITECTURE.md\` in the staged files in step 4a.
 
-3. AFTER all code changes are done — run the full git workflow:
+4. AFTER all code changes are done — run the full git workflow:
    a. Stage only the files you changed (list them explicitly, do not use git add -A):
       git add <file1> <file2> ...
    b. Commit:
@@ -51,7 +51,7 @@ Instructions:
       Then run:
       gh pr create --title "Fix #${issue.number}: ${issue.title}" --body-file <temp-path>
 
-4. After the PR is open, return to ${defaultBranch}:
+5. After the PR is open, return to ${defaultBranch}:
    git checkout ${defaultBranch}
 
 Use this format for the PR body:
