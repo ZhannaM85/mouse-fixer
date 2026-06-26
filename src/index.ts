@@ -17,6 +17,7 @@ import { startServer } from './server.js';
 import { runPipeline, PipelineContext, PipelineStage } from './pipeline.js';
 import { baStage } from './agents/ba.js';
 import { devStage } from './agents/dev.js';
+import { buildArchPrompt, archStage } from './agents/arch.js';
 import { qaStage } from './agents/qa.js';
 
 const DEFAULT_TIMEOUT_S = 600; // 10 minutes
@@ -1970,10 +1971,11 @@ async function runPipelineFix(
         }
     }
 
-    // Build stage list based on roles (order: ba → dev → qa)
+    // Build stage list based on roles (order: ba → dev → arch → qa)
     const stages: PipelineStage[] = [];
     if (roles.includes('ba')) stages.push(baStage);
     stages.push(devStage);
+    stages.push(archStage);
     if (roles.includes('qa')) stages.push(qaStage);
 
     const ctx: PipelineContext = { repo, issue, defaultBranch, branch };
@@ -2026,6 +2028,35 @@ async function runPipelineFix(
     else if (devOutput && devOutput !== '(no summary)') logParts.push(devOutput.trim());
     logParts.push(reportText);
     writeRunLog(logDir, runTimestamp, issueNumber, logParts.join('\n\n') + '\n');
+}
+
+async function runArchStage(
+    issueNumber: number,
+    branch: string,
+    repo: string,
+    defaultBranch: string,
+    cwd: string,
+    timeoutMs: number,
+    model?: string,
+    maxTurns = DEFAULT_MAX_TURNS,
+): Promise<void> {
+    const ctx: PipelineContext = {
+        repo,
+        issue: { number: issueNumber, title: '', body: '', labels: [] },
+        defaultBranch,
+        branch,
+    };
+    const prompt = buildArchPrompt(ctx);
+    console.log(`\n  ── Docs: ARCHITECTURE.md ───────────────────`);
+    console.log(`  Updating docs/ARCHITECTURE.md for #${issueNumber}…`);
+    const result = await spawnClaude(prompt, cwd, timeoutMs, model, maxTurns, '', `ARCHITECTURE.md for #${issueNumber}`);
+    if (result.timedOut) {
+        console.warn('  Warning: ARCHITECTURE.md update timed out.');
+    } else if (result.processError) {
+        console.warn(`  Warning: ARCHITECTURE.md update failed: ${result.processError.message}`);
+    } else {
+        console.log('  docs/ARCHITECTURE.md updated.');
+    }
 }
 
 async function main(): Promise<void> {
@@ -2120,6 +2151,7 @@ async function main(): Promise<void> {
             results.push(result);
             const success = !result.timedOut && !result.maxTurnsReached && !result.processError && !result.approvalDeclined;
             if (!dryRun && success) {
+                await runArchStage(result.issueNumber, result.branch, repo, defaultBranch, cwd, timeoutMs, model, maxTurns);
                 markIssueDone(result.issueNumber, cwd, result.branch);
                 if (result.prUrl) {
                     await performAutoMerge(result.prUrl, defaultBranch, cwd);
@@ -2151,6 +2183,7 @@ async function main(): Promise<void> {
         }
         // markIssueDone already called inline in the autoMerge sequential loop above
         if (!autoMerge && !dryRun && !result.approvalDeclined && !result.timedOut && !result.maxTurnsReached && !result.processError) {
+            await runArchStage(result.issueNumber, result.branch, repo, defaultBranch, cwd, timeoutMs, model, maxTurns);
             markIssueDone(result.issueNumber, cwd, result.branch);
         }
 
