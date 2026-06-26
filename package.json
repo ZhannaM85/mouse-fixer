@@ -1,6 +1,6 @@
 {
   "name": "mouse-fixes",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Lightweight Claude Code agent that fixes a GitHub issue and opens a PR",
   "type": "module",
   "author": "Zhanna M <hoursquared@gmail.com>",
