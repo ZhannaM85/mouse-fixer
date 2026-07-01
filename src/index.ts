@@ -718,6 +718,10 @@ export function findResumableSessions(cwd: string, repo: string, branchPrefix = 
         for (const file of stateFiles) {
             try {
                 const state = JSON.parse(readFileSync(join(stateDirectory, file), 'utf8')) as RunState;
+                // Record the issue number as seen even when we skip it below, so the
+                // branch-scan fallback (Source 2) doesn't re-surface an issue whose
+                // state file already says it's done or has no branch to resume.
+                seenIssueNumbers.add(state.issue);
                 if (state.stage === 'done') continue;
                 if (!state.branch) continue;
 
@@ -767,7 +771,6 @@ export function findResumableSessions(cwd: string, repo: string, branchPrefix = 
                     startedAt: state.startedAt,
                     hasBranchLocally,
                 });
-                seenIssueNumbers.add(state.issue);
             } catch { /* skip unparseable state files */ }
         }
     }
