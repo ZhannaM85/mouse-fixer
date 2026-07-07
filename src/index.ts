@@ -105,7 +105,7 @@ type Command =
     | { kind: 'fix'; issueNumbers: number[]; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; dryRun: boolean; approve?: ApproveCheckpoint; maxCost?: number; autoMerge: boolean; worktree: boolean; quality: QualityMode; pipeline: boolean; roles: string[] }
     | { kind: 'start'; timeoutMs: number }
     | { kind: 'watch'; intervalSeconds: number; timeoutMs: number; skipChecks: boolean; autoMerge: boolean; label?: string }
-    | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean }
+    | { kind: 'resume'; issueNumber: number | null; timeoutMs: number; model?: string; maxTurns: number; skipChecks: boolean; autoMerge: boolean }
     | { kind: 'serve'; port: number }
     | { kind: 'review'; prNumber: number; model?: string; comment: boolean; timeoutMs: number; maxTurns: number };
 
@@ -132,7 +132,7 @@ Additional fix-mode usage:
   mouse-fixes <issue> [issue2 ...] [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
   mouse-fixes next   [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
   mouse-fixes start  [--timeout <seconds>]
-  mouse-fixes resume [<issue>] [--timeout <seconds>] [--model <model-id>] [--max-turns <n>]
+  mouse-fixes resume [<issue>] [--timeout <seconds>] [--model <model-id>] [--max-turns <n>] [--auto-merge]
   mouse-fixes --watch [--interval <seconds>] [--label <name>] [--timeout <seconds>]
 
   next                 Auto-pick the next open issue from docs/issues-priority.md
@@ -390,7 +390,7 @@ Run from inside the target git repository.
     if (positional[0] === 'resume') {
         const issueArg = positional[1];
         const issueNumber = issueArg !== undefined ? parseIssueNumber(issueArg) : null;
-        return { kind: 'resume', issueNumber, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks };
+        return { kind: 'resume', issueNumber, timeoutMs: timeoutS * 1000, model, maxTurns, skipChecks, autoMerge };
     }
 
     if (positional[0] === 'start') {
@@ -857,6 +857,7 @@ async function runResume(
     timeoutMs: number,
     cliModel: string | undefined,
     cliMaxTurns: number,
+    autoMerge: boolean,
     config: MouseFixesConfig = {}
 ): Promise<void> {
     const cwd = process.cwd();
@@ -942,7 +943,8 @@ async function runResume(
         : (session.maxTurns !== DEFAULT_MAX_TURNS ? session.maxTurns : (config.maxTurns ?? DEFAULT_MAX_TURNS));
 
     const modelLabel = model ? `  model: ${model}` : '';
-    console.log(`\nmouse-fixes resume — issue #${session.issueNumber}${modelLabel}\n`);
+    const autoMergeLabel = autoMerge ? '  [AUTO-MERGE]' : '';
+    console.log(`\nmouse-fixes resume — issue #${session.issueNumber}${modelLabel}${autoMergeLabel}\n`);
     console.log(`  Branch: ${session.branch}`);
     console.log(`  Previous stage: ${session.stage}`);
 
@@ -1051,6 +1053,9 @@ async function runResume(
     }
     if (!timedOut && !maxTurnsReached && !processError) {
         markIssueDone(session.issueNumber, cwd, session.branch);
+        if (autoMerge && prUrl) {
+            await performAutoMerge(prUrl, defaultBranch, cwd);
+        }
     }
 
     if (output && output !== '(no summary)') {
@@ -2084,7 +2089,7 @@ async function main(): Promise<void> {
     }
 
     if (command.kind === 'resume') {
-        await runResume(command.issueNumber, command.timeoutMs, command.model, command.maxTurns, config);
+        await runResume(command.issueNumber, command.timeoutMs, command.model, command.maxTurns, command.autoMerge, config);
         return;
     }
 
