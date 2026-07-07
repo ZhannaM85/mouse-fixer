@@ -118,6 +118,8 @@ sequenceDiagram
 | `fixIssue(n, opts)` | Full fix workflow for a single issue: fetch → preflight → branch → choose prompt strategy (default / dry-run / worktree / approve / pipeline) → `spawnClaude` or `runPipeline` → quality checks → state update → timer report. |
 | `markIssueDone(cwd, n)` | Applies strikethrough to the issue row in `docs/issues-priority.md` and commits + pushes the change. Called by `start` / `watch` after a successful fix. |
 | `findResumableSessions(cwd)` | Scans `.mouse-fixes/state/` for runs in `claude-running` stage and returns their issue numbers. Used by the `resume` command. |
+| `runResume(issueNumber, timeoutMs, model, maxTurns, autoMerge, config)` | Handler for the `resume` command: locates the interrupted session (explicit issue number or auto-detected), re-spawns Claude on the existing branch, and on success marks the issue done — auto-merging the PR when `--auto-merge` is passed (#99). |
+| `performAutoMerge(prUrl, defaultBranch, cwd)` | Merges a completed PR via `gh` (extracting the PR number from the URL) and returns to the default branch. Shared by `fix --auto-merge`, `watch --auto-merge`, and `resume --auto-merge`. |
 | `buildWorktreePrompt(...)` | Prompt variant for `--worktree` mode — tells Claude to work in the provided worktree path and not switch branches. |
 | `buildApproveBeforePushPrompt(...)` | Prompt variant that pauses before `git push` and waits for approval. |
 | `buildApproveBeforePrPrompt(...)` | Prompt variant that pauses before `gh pr create` and waits for approval. |
@@ -287,7 +289,7 @@ mouse-fixes fix <N> --dry-run    Show the prompt without running
 mouse-fixes fix <N> --worktree   Use a git worktree (isolated working copy)
 mouse-fixes start           Fix the next open issue from issues-priority.md
 mouse-fixes watch           Poll and fix issues continuously
-mouse-fixes resume          Resume an interrupted run
+mouse-fixes resume [<N>] [--auto-merge]   Resume an interrupted run; optionally auto-merge the PR on success
 mouse-fixes review <N>      Run QA review on existing PR #N
 mouse-fixes serve [--port]  Start webhook server for external triggers
 mouse-fixes reset-state <N> Clear state file for issue #N
