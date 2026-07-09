@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, unlinkSync, mkdir
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { StepTimer, SessionStats } from './timer.js';
 import { fetchIssue, fetchAllIssues, fetchPR, fetchPRDiff, Issue, PullRequest } from './github.js';
@@ -109,6 +109,36 @@ type Command =
     | { kind: 'serve'; port: number }
     | { kind: 'review'; prNumber: number; model?: string; comment: boolean; timeoutMs: number; maxTurns: number };
 
+interface ClaudeSettingsModel {
+    model: string;
+    source: string;
+}
+
+/**
+ * Mirrors the claude CLI's own settings precedence for the "model" key
+ * (project-local > project-shared > user) so --which-model can report
+ * the model claude would actually pick when mouse-fixes passes no --model.
+ */
+function resolveClaudeSettingsModel(cwd: string): ClaudeSettingsModel | null {
+    const candidates = [
+        { path: join(cwd, '.claude', 'settings.local.json'), source: '.claude/settings.local.json' },
+        { path: join(cwd, '.claude', 'settings.json'), source: '.claude/settings.json' },
+        { path: join(homedir(), '.claude', 'settings.json'), source: '~/.claude/settings.json (user default)' },
+    ];
+    for (const { path, source } of candidates) {
+        if (!existsSync(path)) continue;
+        try {
+            const parsed = JSON.parse(readFileSync(path, 'utf8'));
+            if (typeof parsed.model === 'string' && parsed.model) {
+                return { model: parsed.model, source };
+            }
+        } catch {
+            // Ignore unreadable/invalid settings files — fall through to the next candidate.
+        }
+    }
+    return null;
+}
+
 function parseArgs(config: MouseFixesConfig = {}): Command {
     const args = process.argv.slice(2);
 
@@ -144,8 +174,9 @@ Additional fix-mode usage:
   --label <name>       Only watch issues with this label (--watch mode only)
   --model <model-id>   Claude model to use (e.g. claude-haiku-4-5-20251001, claude-sonnet-4-6)
                        If omitted, the claude CLI uses its own default
-  --which-model        Print which model would be used (--model flag, then ${CONFIG_FILENAME}, then
-                       "none" if the claude CLI's own default would apply) and exit
+  --which-model        Print which model would be used: --model flag, then ${CONFIG_FILENAME},
+                       then the "model" key from Claude Code settings (project-local >
+                       project-shared > user), then "none found" — and exit
   --max-turns <n>      Max conversation turns Claude may take (default: ${DEFAULT_MAX_TURNS})
   --approve <stage>    Pause for human approval at "before-push" or "before-pr"
   --dry-run            Apply edits locally but skip commit, push, and PR creation
@@ -292,7 +323,12 @@ Run from inside the target git repository.
         } else if (config.model) {
             console.log(`${config.model}  (source: ${CONFIG_FILENAME})`);
         } else {
-            console.log(`(none) — no --model flag or "${CONFIG_FILENAME}" model key set; the claude CLI will use its own default model`);
+            const claudeDefault = resolveClaudeSettingsModel(process.cwd());
+            if (claudeDefault) {
+                console.log(`${claudeDefault.model}  (source: ${claudeDefault.source})`);
+            } else {
+                console.log('(none found) — no --model flag, no .mouse-fixes.yml, and no "model" key in any Claude Code settings file; the claude CLI\'s built-in default applies');
+            }
         }
         process.exit(0);
     }
