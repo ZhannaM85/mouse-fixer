@@ -144,6 +144,8 @@ Additional fix-mode usage:
   --label <name>       Only watch issues with this label (--watch mode only)
   --model <model-id>   Claude model to use (e.g. claude-haiku-4-5-20251001, claude-sonnet-4-6)
                        If omitted, the claude CLI uses its own default
+  --which-model        Print which model would be used (--model flag, then ${CONFIG_FILENAME}, then
+                       "none" if the claude CLI's own default would apply) and exit
   --max-turns <n>      Max conversation turns Claude may take (default: ${DEFAULT_MAX_TURNS})
   --approve <stage>    Pause for human approval at "before-push" or "before-pr"
   --dry-run            Apply edits locally but skip commit, push, and PR creation
@@ -178,6 +180,8 @@ Review-mode usage:
 
 Examples:
   mouse-fixes 38
+  mouse-fixes --which-model
+  mouse-fixes --which-model --model claude-opus-4-8
   mouse-fixes serve
   mouse-fixes serve --port 8080
   mouse-fixes 42 --worktree
@@ -279,6 +283,18 @@ Run from inside the target git repository.
             process.exit(1);
         }
         model = val;
+    }
+
+    // --which-model: report which model would be used, without doing any work
+    if (args.includes('--which-model')) {
+        if (mIdx !== -1) {
+            console.log(`${model}  (source: --model flag)`);
+        } else if (config.model) {
+            console.log(`${config.model}  (source: ${CONFIG_FILENAME})`);
+        } else {
+            console.log(`(none) — no --model flag or "${CONFIG_FILENAME}" model key set; the claude CLI will use its own default model`);
+        }
+        process.exit(0);
     }
 
     // maxTurns: CLI --max-turns overrides config, config overrides DEFAULT_MAX_TURNS
